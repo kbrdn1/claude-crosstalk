@@ -35,8 +35,11 @@ dev: ## Start Claude Code with this checkout loaded as a mod (nothing installed)
 
 types: ## Regenerate types/claude-code.d.ts from the installed Claude Code
 	@printf "${YELLOW}Writing the plugin API declarations...${NC}\n"
+	@rm -rf .claude/types
 	$(WITH_MODS) $(CLAUDE) -p "/plugin-types" > /dev/null
 	cp .claude/types/claude-code.d.ts types/claude-code.d.ts
+	@head -1 types/claude-code.d.ts | grep -qF "Claude Code $$($(CLAUDE) --version | cut -d' ' -f1)." \
+		|| { printf "${RED}types/claude-code.d.ts does not name the installed build${NC}\n"; exit 1; }
 	@printf "${GREEN}types/claude-code.d.ts: $$(head -1 types/claude-code.d.ts)${NC}\n"
 
 # =============================================================================
