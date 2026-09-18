@@ -1,0 +1,4 @@
+{
+  "description": "crosstalk: skeleton, hooks nothing yet",
+  "modules": ["./register.ts"]
+}

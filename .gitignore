@@ -1,0 +1,12 @@
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+node_modules/
+
+# Local agent/tool state (/plugin-types writes .claude/types here: build- and
+# machine-specific, the pinned copy lives in types/)
+.claude/
+.serena/
+graphify-out/

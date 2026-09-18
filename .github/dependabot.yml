@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # crosstalk has no runtime dependencies: the engine is Claude Code itself
+  # (tracked through `make types`), so only the workflows' actions are bumped.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "ci"
+      - "dependencies"
+    commit-message:
+      prefix: "⬆️ ci(actions)"
+      include: "scope"

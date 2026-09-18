@@ -1,0 +1,49 @@
+name: "✨ Feature Request"
+description: "Suggest a new feature or enhancement"
+title: "[Feature]: "
+labels: ["feature"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Feature request
+        Describe the feature, why it's useful, and how you'd use it. The more concrete the use case, the better.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today?
+      placeholder: "Currently crosstalk doesn't let me ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How should crosstalk behave instead?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - pane (layout, keys, picker, reply)
+        - conversations (history, threads, unread)
+        - peers (discovery, status, remote sessions)
+        - install / update
+    validations:
+      required: true
+
+  - type: textarea
+    id: engine
+    attributes:
+      label: Engine surface
+      description: The hook events or `$` calls it would need, if you know them (see `types/claude-code.d.ts`).
+    validations:
+      required: false

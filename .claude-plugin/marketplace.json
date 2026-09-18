@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-crosstalk",
+  "description": "crosstalk, a Claude Mod to chat with your other Claude Code sessions",
+  "owner": {
+    "name": "Kylian Bardini",
+    "url": "https://github.com/kbrdn1"
+  },
+  "plugins": [
+    {
+      "name": "crosstalk",
+      "description": "/crosstalk: a pane with this session's conversations with its peer sessions, and a reply field",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

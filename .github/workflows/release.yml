@@ -1,0 +1,79 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: github release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # An installed copy updates to what plugin.json says: a tag that
+      # disagrees with it would publish one version and ship another.
+      - name: check the tag against plugin.json
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          manifest=$(jq -r .version .claude-plugin/plugin.json)
+          if [ "$manifest" != "${TAG#v}" ]; then
+            echo "::error::tag ${TAG} but .claude-plugin/plugin.json says ${manifest}"
+            exit 1
+          fi
+
+      # Release notes come from the per-version file under `changelogs/`,
+      # not the top-level `CHANGELOG.md` (the in-progress index, empty once
+      # the release is cut). Pre-releases read `changelogs/pre-releases/`.
+      - name: resolve changelog path
+        id: changelog
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          case "$version" in
+            *-*) path="changelogs/pre-releases/${version}.md"; prerelease=true ;;
+            *)   path="changelogs/${version}.md";              prerelease=false ;;
+          esac
+          if [ ! -f "$path" ]; then
+            echo "::error::Expected ${path} to exist for tag ${TAG}: the release notes would otherwise be empty."
+            exit 1
+          fi
+          echo "path=${path}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+      - name: publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NOTES: ${{ steps.changelog.outputs.path }}
+          PRERELEASE: ${{ steps.changelog.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --notes-file "$NOTES" \
+              --draft=false \
+              --prerelease="$PRERELEASE"
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --notes-file "$NOTES" \
+              --verify-tag \
+              --draft=false \
+              --prerelease="$PRERELEASE"
+          fi

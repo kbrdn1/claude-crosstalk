@@ -1,0 +1,13 @@
+{
+  "name": "crosstalk",
+  "version": "0.1.0",
+  "description": "A Claude Mod: /crosstalk opens a pane with this session's conversations with your other Claude Code sessions (peer deliveries in, SendMessage out) and lets you reply from it.",
+  "author": {
+    "name": "Kylian Bardini",
+    "url": "https://github.com/kbrdn1"
+  },
+  "homepage": "https://github.com/kbrdn1/claude-crosstalk",
+  "repository": "https://github.com/kbrdn1/claude-crosstalk",
+  "license": "MIT",
+  "keywords": ["mod", "function-hooks", "cross-session", "sendmessage", "chat"]
+}

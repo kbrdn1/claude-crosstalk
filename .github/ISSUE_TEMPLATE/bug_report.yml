@@ -1,0 +1,90 @@
+name: "🐛 Bug Report"
+description: "Report a bug or unexpected behaviour"
+title: "[Bug]: "
+labels: ["fix"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Bug report
+        Thanks for taking the time to file a bug. Mods are early access: the Claude Code version matters more than usual, please include it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: "When a peer sends me a message, the pane shows ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. `make dev` in session A, `/crosstalk`
+        2. From session B, SendMessage to A
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - pane (/crosstalk, picker, reply field)
+        - incoming messages (session.receive)
+        - outgoing messages (SendMessage)
+        - peer list (ListAgents)
+        - install / update (Makefile, marketplace)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - terminal
+        - desktop
+        - VS Code
+    validations:
+      required: true
+
+  - type: input
+    id: claude_version
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`.
+      placeholder: "2.1.277 (Claude Code)"
+    validations:
+      required: true
+
+  - type: input
+    id: crosstalk_version
+    attributes:
+      label: crosstalk version
+      description: Output of `make version`, or the version `/plugin` shows.
+      placeholder: "crosstalk 0.1.0 · types from 2.1.277"
+    validations:
+      required: true
+
+  - type: textarea
+    id: capture
+    attributes:
+      label: Pane capture / logs
+      description: A screenshot or `tmux capture-pane -p` of the pane, and any `crosstalk:` line from the transcript.
+      render: text
+    validations:
+      required: false

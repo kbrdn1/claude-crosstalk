@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: tsc against types/
+        run: make typecheck
+
+  plugin:
+    name: validate + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # The build the pinned declarations were written by (first line of
+      # types/claude-code.d.ts): the mod is tested against the engine its
+      # types describe, not whatever is latest.
+      - name: install Claude Code
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(head -1 types/claude-code.d.ts | sed -E 's/.*Claude Code ([0-9][^ ]*)\.$/\1/')
+          echo "types written by Claude Code $version"
+          curl -fsSL https://claude.ai/install.sh | bash -s "$version"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: claude --version
+        run: claude --version
+
+      - name: claude plugin validate
+        run: make validate
+
+      - name: claude plugin test
+        run: make test
