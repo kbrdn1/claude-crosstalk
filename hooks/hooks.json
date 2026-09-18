@@ -1,4 +1,4 @@
 {
-  "description": "crosstalk: skeleton, hooks nothing yet",
+  "description": "crosstalk: session.receive and tool.call{SendMessage} record the conversation with each peer session as it passes, unchanged; /crosstalk toggles a Pane drawing it with a picker and a reply field that sends through SendMessage",
   "modules": ["./register.ts"]
 }
