@@ -1,4 +1,5 @@
 import type { On, ToolCallInput } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import * as Thread from '../hooks/thread'
@@ -70,6 +71,14 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   return { sent, opened, statuses, runs, store, clock }
 }
 
+/**
+ * Opens `peer`'s conversation from the inbox, as the person's ⏎ on its row.
+ */
+async function opened($: Engine, peer: string): Promise<void> {
+  await $.ui.render(PANE)
+  await $.ui.press({ plugin: 'crosstalk', key: `open:${peer}` })
+}
+
 describe('register', () => {
   test('/crosstalk opens the pane and lists the local peers', async ($, on) => {
     const w = world(on)
@@ -89,8 +98,8 @@ describe('register', () => {
 
       expect(textOf(await ui.drawn()), surface).toContain('● claude-98')
       expect((await ui.findAll({ type: 'Button' })).map(b => b.key), 'offline and cloud peers are no conversation').toEqual([
-        'tab:api',
-        'tab:web',
+        'open:api',
+        'open:web',
       ])
       await ui.unmount()
     }
@@ -104,6 +113,7 @@ describe('register', () => {
     expect(await $.session.receive(fromPeer('api [a1aa87]', 'tests are green'))).toEqual({
       text: '<cross-session-message from="api [a1aa87]">tests are green</cross-session-message>',
     })
+    await opened($, 'api')
 
     const drawn = textOf(await $.ui.render(PANE))
 
@@ -127,6 +137,7 @@ describe('register', () => {
     await $.session.start(SESSION)
     await $.tool.call({ tool: 'SendMessage', to: 'web [ef57a2]', message: 'ship it' })
     await $.command.run(CROSSTALK)
+    await opened($, 'web')
 
     const drawn = textOf(await $.ui.render(PANE))
 
@@ -142,6 +153,7 @@ describe('register', () => {
     await $.command.run(CROSSTALK)
 
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+    await ui.press({ key: 'open:api' })
 
     await ui.input({ key: 'reply', text: 'yes, go', kind: 'submit' })
     await w.clock.settle()
@@ -178,7 +190,7 @@ describe('register', () => {
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
 
     expect(textOf(await ui.drawn())).toContain('deployed')
-    await ui.press({ key: 'tab:api' })
+    await ui.press({ key: 'open:api' })
     await ui.redraw()
 
     const api = textOf(await ui.drawn())
@@ -197,6 +209,7 @@ describe('register', () => {
     await $.session.start(SESSION)
     expect(w.runs, 'the journal is read on a first start only').toEqual([])
     await $.command.run(CROSSTALK)
+    await opened($, 'api')
 
     expect(textOf(await $.ui.render(PANE))).toContain('typed in the pane')
   })
@@ -224,7 +237,7 @@ describe('register', () => {
 
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
 
-    expect((await ui.findAll({ type: 'Button' })).map(b => b.key)).toEqual(['tab:api', 'tab:web'])
+    expect((await ui.findAll({ type: 'Button' })).map(b => b.key)).toEqual(['open:api', 'open:web'])
     expect(textOf(await ui.drawn())).toContain('yes')
   })
 
@@ -237,6 +250,7 @@ describe('register', () => {
     await $.command.run(CROSSTALK)
 
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+    await ui.press({ key: 'open:gone' })
 
     expect(textOf(await ui.drawn())).not.toContain('lost')
 
@@ -263,6 +277,7 @@ describe('register', () => {
     await $.command.run(CROSSTALK)
 
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+    await ui.press({ key: 'open:claude-98' })
 
     await ui.input({ key: 'reply', text: 'hello', kind: 'submit' })
     await w.clock.settle()
@@ -291,15 +306,15 @@ describe('register', () => {
     await $.session.receive(fromPeer('api', 'ready?'))
     await $.tool.call({ tool: 'SendMessage', to: 'api', message: 'yes' })
     await $.command.run(CROSSTALK)
+    await opened($, 'api')
 
     const wide = await $.ui.render({ ...PANE, props: { ...PANE.props, bodyColumns: 80 } })
     const narrow = await $.ui.render({ ...PANE, props: { ...PANE.props, bodyColumns: 36 } })
 
     expect(textOf(wide), 'your bar on the right').toContain('yes┃')
-    expect(textOf(wide)).toContain('1-9 switch')
+    expect(textOf(wide)).toContain('⏎ send · ‹ or esc inbox')
     expect(textOf(narrow), 'your bar on the left').toContain('┃yes')
-    expect(textOf(narrow)).not.toContain('1-9 switch')
-    expect(textOf(narrow)).toContain('⏎ send · esc close')
+    expect(textOf(narrow)).toContain('⏎ send · esc inbox')
   })
 
   test('an unfocused pane says how to reach it', async ($, on) => {
@@ -309,7 +324,7 @@ describe('register', () => {
     await $.command.run(CROSSTALK)
 
     expect(textOf(await $.ui.render({ ...PANE, props: { ...PANE.props, isFocused: false } }))).toContain(
-      'ctrl+x tab to reply',
+      'ctrl+x tab',
     )
   })
 
@@ -330,6 +345,8 @@ describe('register', () => {
       surface: 'terminal' as const,
       props: { ...PANE.props, scroll: { offset: 0, bodyRows: 16 } },
     })
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
     const bottom = textOf(await ui.drawn())
 
     expect(bottom).toContain('message 29')
@@ -348,6 +365,128 @@ describe('register', () => {
     await ui.redraw()
 
     expect(textOf(await ui.drawn())).toContain('message 29')
+  })
+
+  test('the inbox shows each conversation whole: name, unread, preview, time', async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('test-655-fmt-clippy-guards', 'audit is next\nsecond line'))
+    await $.tool.call({ tool: 'SendMessage', to: 'api', message: 'ship it' })
+    await $.command.run(CROSSTALK)
+
+    const drawn = textOf(await $.ui.render(PANE))
+
+    expect(drawn, 'no name cut at 64 columns').toContain('test-655-fmt-clippy-guards')
+    expect(drawn).toContain('audit is next')
+    expect(drawn).not.toContain('second line')
+    expect(drawn).toContain('you: ship it')
+    expect(drawn, 'an idle local session with nothing said').toContain('no message yet')
+    expect(drawn, 'its unread count, then its time').toMatch(/test-655-fmt-clippy-guards1 {2}\d\d:\d\d/)
+  })
+
+  test('a row opens its thread, read; back returns to the inbox', async ($, on) => {
+    const w = world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.command.run(CROSSTALK)
+    await w.clock.advance(500)
+
+    const asked = w.opened.length
+
+    await opened($, 'api')
+
+    const thread = textOf(await $.ui.render(PANE))
+
+    expect(thread).toContain('‹ api')
+    expect(thread).toContain('ready?')
+    expect(w.statuses.at(-1), 'opened, it is read').toBeUndefined()
+    await w.clock.advance(500)
+    expect(w.opened.length, 'the pane asks for the keys again once the thread is drawn').toBe(asked + 1)
+
+    await $.ui.press({ plugin: 'crosstalk', key: 'back' })
+
+    expect(textOf(await $.ui.render(PANE))).toContain('open')
+    expect(textOf(await $.ui.render(PANE))).not.toContain('‹ api')
+  })
+
+  test("/crosstalk closes the pane from a thread too (only the person's esc goes back)", async ($, on) => {
+    world(on)
+
+    const closed: string[] = []
+
+    on('ui.close', ($, e) => {
+      closed.push(e.origin.kind)
+
+      return { value: undefined }
+    })
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.command.run(CROSSTALK)
+    await opened($, 'api')
+
+    expect(await $.command.run(CROSSTALK)).toEqual({ text: 'crosstalk closed' })
+    expect(closed).toEqual(['plugin'])
+  })
+
+  test('reading one thread, a message elsewhere shows in its header', async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.command.run(CROSSTALK)
+    await opened($, 'api')
+    await $.session.receive(fromPeer('web', 'deployed'))
+    await $.session.receive(fromPeer('api', 'still there?'))
+
+    const drawn = textOf(await $.ui.render(PANE))
+
+    expect(drawn).toContain('✉ 1')
+    expect(drawn).toContain('still there?')
+  })
+
+  test("a draft stays with its conversation", async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.session.receive(fromPeer('web', 'deployed'))
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
+    await ui.input({ key: 'reply', text: 'half a thought', kind: 'change' })
+    await ui.press({ key: 'back' })
+    await ui.redraw()
+    await ui.press({ key: 'open:web' })
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'reply' }))?.props.value).toBe('')
+
+    await ui.press({ key: 'back' })
+    await ui.redraw()
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'reply' }))?.props.value).toBe('half a thought')
+  })
+
+  test('/crosstalk opens on the inbox again', async ($, on) => {
+    world(on)
+    on('ui.close', () => ({ value: undefined }))
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.command.run(CROSSTALK)
+    await opened($, 'api')
+    await $.command.run(CROSSTALK)
+    await $.command.run(CROSSTALK)
+
+    expect(textOf(await $.ui.render(PANE))).not.toContain('‹ api')
   })
 
   test('a message arriving while the pane is closed shows as unread', async ($, on) => {

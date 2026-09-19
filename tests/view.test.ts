@@ -1,52 +1,25 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { Conversation, Entry } from '../hooks/thread'
+import type { Entry } from '../hooks/thread'
 import * as View from '../hooks/view'
 import { AT } from './fixtures'
-
-const CONVERSATIONS: Conversation[] = [
-  { peer: 'claude-crosstalk-b2', status: 'idle', unread: 0 },
-  { peer: 'test-655-fmt-clippy-guards', status: 'idle', unread: 3 },
-  { peer: 'crimson-desert-start', status: 'busy', unread: 0 },
-]
 
 const at = (hhmm: string, day = '19') => AT(`2026-09-${day}T${hhmm}:00.000`)
 
 describe('view', () => {
-  test('tabs fit the width, numbered, the selected one flagged, unread counted', async () => {
-    const { tabs, hidden } = View.tabsOf(CONVERSATIONS, 'test-655-fmt-clippy-guards', 80)
-
-    expect(hidden).toBe(0)
-    expect(tabs.map(t => [t.hotkey, t.isSelected])).toEqual([
-      ['1', false],
-      ['2', true],
-      ['3', false],
-    ])
-    expect(tabs[1]?.label).toMatch(/·3$/)
-    expect(View.tabsWidthOf(tabs, hidden)).toBeLessThanOrEqual(80)
+  test("an inbox row previews the last message, yours marked, first line only", async () => {
+    expect(View.previewOf(undefined, 40)).toBe('no message yet')
+    expect(View.previewOf({ dir: 'in', peer: 'api', text: 'tests are green\nand more' }, 40)).toBe(
+      'tests are green',
+    )
+    expect(View.previewOf({ dir: 'out', peer: 'api', text: 'ship it' }, 40)).toBe('you: ship it')
+    expect(View.previewOf({ dir: 'in', peer: 'api', text: 'x'.repeat(60) }, 20)).toHaveLength(20)
   })
 
-  test('narrow tabs truncate names, then hide the rest, never the selected', async () => {
-    const narrow = View.tabsOf(CONVERSATIONS, 'claude-crosstalk-b2', 44)
-
-    expect(narrow.hidden).toBe(0)
-    expect(narrow.tabs.some(t => t.label.includes('…'))).toBe(true)
-
-    const alike = View.tabsOf(
-      ['claude-98', 'claude-9f', 'claude-crosstalk'].map(peer => ({ peer, unread: 0 })),
-      'claude-98',
-      30,
-    )
-    const labels = alike.tabs.map(t => t.label)
-
-    expect(new Set(labels).size, `names alike stay apart once cut: ${labels.join(' ')}`).toBe(labels.length)
-    expect(View.tabsWidthOf(narrow.tabs, narrow.hidden)).toBeLessThanOrEqual(44)
-
-    const tiny = View.tabsOf(CONVERSATIONS, 'crimson-desert-start', 24)
-
-    expect(tiny.hidden).toBeGreaterThan(0)
-    expect(tiny.tabs.some(t => t.isSelected && t.peer === 'crimson-desert-start')).toBe(true)
-    expect(View.tabsWidthOf(tiny.tabs, tiny.hidden)).toBeLessThanOrEqual(24)
+  test('a name keeps both ends when it has to be cut, whole when it fits', async () => {
+    expect(View.fitName('test-655-fmt-clippy-guards', 40)).toBe('test-655-fmt-clippy-guards')
+    expect(View.fitName('claude-98', 6)).not.toBe(View.fitName('claude-9f', 6))
+    expect(View.fitName('test-655-fmt-clippy-guards', 12)).toHaveLength(12)
   })
 
   test('a burst from one side is one group; a new day, a side or a pause starts another', async () => {

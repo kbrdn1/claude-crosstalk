@@ -12,6 +12,10 @@ export const REFRESH_MS = 15_000
 // How long after `/crosstalk` the pane asks for the keyboard again.
 export const FOCUS_RETRY_MS = 150
 
+// How long after a view switch the pane asks for the keyboard back: the keys
+// have to have fallen back to the prompt, or the ask is refused.
+export const REFOCUS_MS = 400
+
 const PEER_ORIGINS = { kind: ['peer', 'peer-send-message'] } as const
 
 // One store key a session: `thread:<session id>`.
@@ -33,6 +37,7 @@ type Host = {
   status: (text: string | undefined) => void
   open: () => Promise<void>
   close: () => Promise<void>
+  focus: (key: string) => void
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
@@ -119,12 +124,53 @@ export const register: Register = on => {
   // The reply the pane is sending: recorded by send() itself, since the
   // engine may or may not run this plugin's tool.call hook for its own call.
   let replying: string | undefined
-  // What the person has typed in the reply field so far.
-  let draft = ''
+  // What the person has typed in each conversation's reply field so far.
+  const drafts = new Map<string, string>()
   // How many messages the thread is scrolled back from its newest one.
   let back = 0
   // Why the last reply did not go, shown in the pane until the next one.
   let notice: string | undefined
+  // The inbox, or the conversation opened from it.
+  let view: 'inbox' | 'thread' = 'inbox'
+
+  /**
+   * Whether `peer`'s conversation is on screen: its messages arrive read.
+   */
+  function isReading(peer: string): boolean {
+    return isOpen && view === 'thread' && thread.selected === peer
+  }
+
+  /**
+   * Gives `key` the keyboard once the view that draws it is drawn. Seen live:
+   * the element that held it (a row, ‹) is gone with the old view, and the
+   * keys fall back to the prompt; the pane asks for them again, as on open.
+   */
+  function refocus(key: string): void {
+    host?.after(REFOCUS_MS, () => {
+      void host
+        ?.open()
+        .then(() => host?.focus(key))
+        .catch(() => undefined)
+    })
+  }
+
+  function openThread(peer: string): void {
+    thread = Thread.select(thread, peer)
+    view = 'thread'
+    back = 0
+    notice = undefined
+    redraw()
+    refocus('reply')
+  }
+
+  function openInbox(): void {
+    const from = thread.selected
+
+    view = 'inbox'
+    back = 0
+    redraw()
+    refocus(from === undefined ? 'reply' : `open:${from}`)
+  }
 
   /**
    * The thread with a new message in it: drawn, and saved for the next start.
@@ -228,6 +274,7 @@ export const register: Register = on => {
           columns: 64,
         }),
       close: () => $.ui.close({ id: PANE_ID }),
+      focus: key => void $.ui.focus({ requestId: PANE_ID, key }).catch(() => undefined),
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
@@ -272,7 +319,7 @@ export const register: Register = on => {
     const known = Thread.withAlias(thread, address, peer)
 
     holdPlace(peer)
-    await commit(Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isOpen))
+    await commit(Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isReading(peer)))
 
     return next(e)
   })
@@ -309,15 +356,13 @@ export const register: Register = on => {
 
     await host.open()
     isOpen = true
+    view = 'inbox'
+    back = 0
 
     // Focus is granted over an empty composer only, and while this command
     // runs the composer still holds `/crosstalk`: ask again once it cleared.
     // Seen live: without this second open, the pane never takes the keys.
     host.after(FOCUS_RETRY_MS, () => void host?.open().catch(() => undefined))
-
-    if (thread.selected !== undefined) {
-      thread = Thread.select(thread, thread.selected)
-    }
 
     await refreshPeers()
     refresh ??= host.every(REFRESH_MS, () => void refreshPeers())
@@ -331,6 +376,14 @@ export const register: Register = on => {
   })
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
+    // The person's esc in a conversation goes back to the inbox, as a
+    // messaging app's back does; /crosstalk (the plugin's close) still closes.
+    if (e.origin.kind === 'person' && view === 'thread') {
+      openInbox()
+
+      return { deny: 'back to the inbox' }
+    }
+
     const result = await next(e)
 
     if (result.deny === undefined) {
@@ -344,9 +397,10 @@ export const register: Register = on => {
   })
 
   // The wheel and the scroll keys move the thread, not the pane: the
-  // header, the tabs and the reply field stay put.
+  // header and the reply field stay put.
   on('ui.scroll', { requestId: PANE_ID }, ($, e, next) => {
-    if (e.origin.kind !== 'person') {
+    // The inbox scrolls as a pane does; a conversation moves its thread.
+    if (e.origin.kind !== 'person' || view !== 'thread') {
       return next(e)
     }
 
@@ -370,20 +424,18 @@ export const register: Register = on => {
         rows: e.props.scroll.bodyRows,
         isFocused: e.props.isFocused,
         back,
-        draft,
-        onSelect: peer => {
-          thread = Thread.select(thread, peer)
-          back = 0
-          redraw()
-        },
+        draft: drafts.get(thread.selected ?? '') ?? '',
+        view,
+        onOpen: peer => openThread(peer),
+        onInbox: () => openInbox(),
         onBack: by => scrollBack(by),
         onInput: text => {
-          draft = text
+          drafts.set(thread.selected ?? '', text)
           host?.invalidate()
         },
         notice,
         onSubmit: text => {
-          draft = ''
+          drafts.delete(thread.selected ?? '')
           notice = undefined
           void send(text)
         },
