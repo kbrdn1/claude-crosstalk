@@ -49,7 +49,9 @@ Where tests go:
   `tool.call` hook; `$.session.messages()` hides peer deliveries (meta rows,
   hence the journal read); a SendMessage nobody answers resolves
   `{ success: false }`, not an error; session names change, sockets hold
-  for the life of the process.
+  for the life of the process; a pane takes the keyboard only opened as a
+  dialog (`focus`, `closeOnEscape`, `holdToasts`) over an empty composer,
+  and a pane's digit hotkeys fire from an empty prompt too.
 - **Record, never rewrite.** crosstalk observes `session.receive` and
   `tool.call`; it passes `e` on unchanged and never consumes a delivery.
 - **After a Claude Code update**: `make types`, then `make ci`. A diff in
