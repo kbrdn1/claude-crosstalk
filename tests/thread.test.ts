@@ -111,10 +111,17 @@ describe('thread', () => {
     const thread = Thread.fromJournal(JOURNAL)
     const saved = JSON.parse(JSON.stringify(Thread.toSaved(thread, 42)))
 
-    expect(Thread.fromSaved(saved)).toEqual({ ...Thread.EMPTY, entries: thread.entries, aliases: thread.aliases, selected: 'web' })
+    expect(Thread.fromSaved(saved)).toEqual({
+      ...Thread.EMPTY,
+      entries: thread.entries,
+      aliases: thread.aliases,
+      selected: 'web',
+    })
     expect(Thread.savedAtOf(saved)).toBe(42)
     expect(Thread.fromSaved('garbage')).toBeUndefined()
-    expect(Thread.fromSaved({ entries: [{ dir: 'in', peer: 1 }], aliases: {} })?.entries).toEqual([])
+    expect(Thread.fromSaved({ entries: [{ dir: 'in', peer: 1 }], aliases: {} })?.entries).toEqual(
+      [],
+    )
   })
 
   test('history is capped, oldest first out', async () => {

@@ -8,7 +8,7 @@ import { AT, textOf } from './fixtures'
 const at = (hhmm: string, day = '19') => AT(`2026-09-${day}T${hhmm}:00.000`)
 
 describe('view', () => {
-  test("an inbox row previews the last message, yours marked, first line only", async () => {
+  test('an inbox row previews the last message, yours marked, first line only', async () => {
     expect(View.previewOf(undefined, 40)).toBe('no message yet')
     expect(View.previewOf({ dir: 'in', peer: 'api', text: 'tests are green\nand more' }, 40)).toBe(
       'tests are green',
@@ -32,7 +32,9 @@ describe('view', () => {
       { dir: 'out', peer: 'api', text: 'e', at: at('00:20') },
     ]
 
-    expect(View.groupsOf(entries).map(g => [g.dir, g.day, g.entries.map(e => e.text).join('')])).toEqual([
+    expect(
+      View.groupsOf(entries).map(g => [g.dir, g.day, g.entries.map(e => e.text).join('')]),
+    ).toEqual([
       ['in', 'fri 18 sep', 'a'],
       ['in', 'sat 19 sep', 'bc'],
       ['out', undefined, 'd'],
@@ -200,7 +202,12 @@ describe('vim keys', () => {
 
     expect(focusedOf(View.paneView(kitOf({ home: 'open:web' }).kit, THREAD))).toBe('open:web')
     expect(
-      focusedOf(View.paneView(kitOf({ view: 'thread', mode: 'normal', home: 'back' }).kit, { ...THREAD, selected: 'api' })),
+      focusedOf(
+        View.paneView(kitOf({ view: 'thread', mode: 'normal', home: 'back' }).kit, {
+          ...THREAD,
+          selected: 'api',
+        }),
+      ),
     ).toBe('back')
   })
 

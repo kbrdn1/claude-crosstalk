@@ -1,8 +1,12 @@
-.PHONY: help dev types typecheck validate test ci install enable-mods update uninstall version
+.PHONY: help dev types typecheck lint fmt fmt-check validate test ci install enable-mods update uninstall version
 
 SHELL := /bin/bash
 CLAUDE ?= claude
 TS_VERSION ?= 5.9.3
+OXLINT_VERSION ?= 1.83.0
+OXFMT_VERSION ?= 0.68.0
+# What oxlint and oxfmt read: never types/ (generated) nor the docs.
+SOURCES := hooks tests
 
 MARKETPLACE := claude-crosstalk
 PLUGIN := crosstalk@$(MARKETPLACE)
@@ -51,6 +55,15 @@ typecheck: ## Typecheck hooks and tests against types/
 	bunx -p typescript@$(TS_VERSION) tsc -p tsconfig.json
 	@printf "${GREEN}Typecheck clean.${NC}\n"
 
+lint: ## Lint hooks and tests (oxlint, .oxlintrc.json)
+	bunx -p oxlint@$(OXLINT_VERSION) oxlint --deny-warnings $(SOURCES)
+
+fmt: ## Format hooks and tests in place (oxfmt, .oxfmtrc.json)
+	bunx -p oxfmt@$(OXFMT_VERSION) oxfmt $(SOURCES)
+
+fmt-check: ## Check hooks and tests are formatted, writing nothing
+	bunx -p oxfmt@$(OXFMT_VERSION) oxfmt --check $(SOURCES)
+
 validate: ## Read the plugin the way the engine will (manifest, hooks, calls)
 	$(WITH_MODS) $(CLAUDE) plugin validate .claude-plugin/plugin.json
 	$(WITH_MODS) $(CLAUDE) plugin validate .
@@ -58,7 +71,7 @@ validate: ## Read the plugin the way the engine will (manifest, hooks, calls)
 test: ## Run the mod's tests (claude plugin test)
 	$(WITH_MODS) $(CLAUDE) plugin test .
 
-ci: typecheck validate test ## Run local CI checks
+ci: fmt-check lint typecheck validate test ## Run local CI checks
 	@printf "${GREEN}${BOLD}Local CI checks completed.${NC}\n"
 
 # =============================================================================

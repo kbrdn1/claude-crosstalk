@@ -13,11 +13,15 @@ concurrency:
 
 jobs:
   typecheck:
-    name: typecheck
+    name: format, lint, typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
+      - name: oxfmt --check
+        run: make fmt-check
+      - name: oxlint
+        run: make lint
       - name: tsc against types/
         run: make typecheck
 

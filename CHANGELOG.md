@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `make lint` (oxlint) and `make fmt` / `fmt-check` (oxfmt) on `hooks/` and
+  `tests/`, both in `make ci` and in CI.
+
 ## Past releases
 
 In reverse chronological order:

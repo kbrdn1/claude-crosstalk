@@ -144,9 +144,7 @@ export function groupsOf(entries: readonly Thread.Entry[]): Group[] {
     const day = entry.at === undefined ? undefined : dayOf(entry.at)
     const isNewDay = day !== undefined && day !== lastDay
     const isPause =
-      entry.at !== undefined &&
-      previous?.at !== undefined &&
-      entry.at - previous.at > GROUP_GAP_MS
+      entry.at !== undefined && previous?.at !== undefined && entry.at - previous.at > GROUP_GAP_MS
     const isSameSide = last !== undefined && last.dir === entry.dir && last.peer === entry.peer
 
     if (last !== undefined && isSameSide && !isNewDay && !isPause) {
@@ -332,7 +330,10 @@ function threadKeys(kit: Kit, shown: number, total: number): RenderElement {
   ])
 }
 
-function statusOf(thread: Thread.Thread, peer: string): { dot: string; color: string; status?: string } {
+function statusOf(
+  thread: Thread.Thread,
+  peer: string,
+): { dot: string; color: string; status?: string } {
   const status = thread.peers.find(listed => listed.name === peer)?.status
 
   if (status === 'idle') return { dot: '●', color: COLORS.idle, status }
@@ -459,7 +460,9 @@ function inboxView(kit: Kit, thread: Thread.Thread): RenderElement {
                     key={`open:${conversation.peer}`}
                     label={fitName(conversation.peer, room)}
                     plain
-                    {...(`open:${conversation.peer}` === kit.home ? { autoFocus: true as const } : {})}
+                    {...(`open:${conversation.peer}` === kit.home
+                      ? { autoFocus: true as const }
+                      : {})}
                     onPress={() => kit.onOpen(conversation.peer)}
                   />
                 </Box>
@@ -499,7 +502,10 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
   const all = Thread.messagesWith(thread, selected)
   const window = windowOf(all, threadRows, kit.back, text)
   const badge = elsewhere > 0 ? `✉ ${elsewhere}` : ''
-  const name = fitName(selected, Math.max(4, kit.columns - 4 - (status ? status.length + 3 : 0) - badge.length - 2))
+  const name = fitName(
+    selected,
+    Math.max(4, kit.columns - 4 - (status ? status.length + 3 : 0) - badge.length - 2),
+  )
 
   return (
     <Box flexDirection="column" width={kit.columns} marginLeft={1}>
