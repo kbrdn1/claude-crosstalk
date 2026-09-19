@@ -55,11 +55,6 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
       ? { result: { success: false, message: 'No agent named gone', display: 'Not sent — no agent named gone is reachable.' } }
       : { result: { success: true } }
   })
-  on('ui.toast', ($, e) => {
-    toasts.push(e.text)
-
-    return { value: undefined }
-  })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', ($, e) => {
     opened.push(e.id)
@@ -67,6 +62,11 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
     return { value: undefined }
   })
   on('ui.panes', () => ({ value: opened.map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })) }))
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
   on('ui.status', ($, e) => {
     statuses.push(e.text)
 
@@ -84,14 +84,14 @@ describe('register', () => {
     expect(await $.command.run(CROSSTALK)).toEqual({})
     expect(w.opened).toEqual(['crosstalk'])
 
+
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface })
-      const picker = await ui.find({ key: 'peer' })
 
-      expect(textOf(await ui.drawn()), surface).toContain('you are claude-98')
-      expect(picker?.props.options, 'offline and cloud peers are no conversation').toEqual([
-        { value: 'api', label: 'api  idle' },
-        { value: 'web', label: 'web  busy' },
+      expect(textOf(await ui.drawn()), surface).toContain('● claude-98')
+      expect((await ui.findAll({ type: 'Button' })).map(b => b.key), 'offline and cloud peers are no conversation').toEqual([
+        'tab:api',
+        'tab:web',
       ])
       await ui.unmount()
     }
@@ -108,7 +108,7 @@ describe('register', () => {
 
     const drawn = textOf(await $.ui.render(PANE))
 
-    expect(drawn).toContain('← api')
+    expect(drawn).toContain('api · ')
     expect(drawn).toContain('tests are green')
   })
 
@@ -131,7 +131,7 @@ describe('register', () => {
 
     const drawn = textOf(await $.ui.render(PANE))
 
-    expect(drawn).toContain('→ you')
+    expect(drawn).toMatch(/you · \d\d:\d\d/)
     expect(drawn).toContain('ship it')
   })
 
@@ -162,7 +162,7 @@ describe('register', () => {
 
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
 
-    expect(textOf(await ui.drawn())).toContain('you are claude-98')
+    expect(textOf(await ui.drawn())).toContain('● claude-98')
   })
 
   test("a session's first start rebuilds what its journal holds, unread none", async ($, on) => {
@@ -179,7 +179,7 @@ describe('register', () => {
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
 
     expect(textOf(await ui.drawn())).toContain('deployed')
-    await ui.select({ key: 'peer', value: 'api' })
+    await ui.press({ key: 'tab:api' })
     await ui.redraw()
 
     const api = textOf(await ui.drawn())
@@ -225,10 +225,7 @@ describe('register', () => {
 
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
 
-    expect((await ui.find({ key: 'peer' }))?.props.options).toEqual([
-      { value: 'api', label: 'api  idle' },
-      { value: 'web', label: 'web  busy' },
-    ])
+    expect((await ui.findAll({ type: 'Button' })).map(b => b.key)).toEqual(['tab:api', 'tab:web'])
     expect(textOf(await ui.drawn())).toContain('yes')
   })
 
@@ -282,6 +279,72 @@ describe('register', () => {
     expect(w.store.has('thread:old1')).toBe(false)
     expect(w.store.has('thread:old2')).toBe(true)
     expect(w.store.has('unrelated')).toBe(true)
+  })
+
+  test('a wide pane draws your side on the right, a narrow one stacks it left', async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.tool.call({ tool: 'SendMessage', to: 'api', message: 'yes' })
+    await $.command.run(CROSSTALK)
+
+    const wide = await $.ui.render({ ...PANE, props: { ...PANE.props, bodyColumns: 80 } })
+    const narrow = await $.ui.render({ ...PANE, props: { ...PANE.props, bodyColumns: 36 } })
+
+    expect(textOf(wide), 'your bar on the right').toContain('yes┃')
+    expect(textOf(wide)).toContain('1-9 switch')
+    expect(textOf(narrow), 'your bar on the left').toContain('┃yes')
+    expect(textOf(narrow)).not.toContain('1-9 switch')
+    expect(textOf(narrow)).toContain('⏎ send · esc close')
+  })
+
+  test('an unfocused pane says how to reach it', async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.command.run(CROSSTALK)
+
+    expect(textOf(await $.ui.render({ ...PANE, props: { ...PANE.props, isFocused: false } }))).toContain(
+      'ctrl+x tab to reply',
+    )
+  })
+
+  test('a long thread shows its newest messages; earlier and newer page through it', async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+
+    for (let i = 0; i < 30; i++) {
+      await $.session.receive(fromPeer('api', `message ${i}`))
+    }
+
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({
+      plugin: 'crosstalk',
+      ...PANE,
+      surface: 'terminal' as const,
+      props: { ...PANE.props, scroll: { offset: 0, bodyRows: 16 } },
+    })
+    const bottom = textOf(await ui.drawn())
+
+    expect(bottom).toContain('message 29')
+    expect(bottom).toMatch(/↑ \d+ earlier/)
+    expect(bottom).not.toContain('newer')
+
+    await ui.press({ key: 'older' })
+    await ui.redraw()
+
+    const back = textOf(await ui.drawn())
+
+    expect(back).not.toContain('message 29')
+    expect(back).toMatch(/↓ \d+ newer/)
+
+    await ui.press({ key: 'newer' })
+    await ui.redraw()
+
+    expect(textOf(await ui.drawn())).toContain('message 29')
   })
 
   test('a message arriving while the pane is closed shows as unread', async ($, on) => {

@@ -64,7 +64,8 @@ export function fromPeer(peer: string, text: string) {
 }
 
 /**
- * A rendered tree's text as it reads: its strings and labels, in order.
+ * A rendered tree's text as it reads: its strings, a Button's label and a
+ * Markdown's text, in order.
  */
 export function textOf(tree: unknown): string {
   if (typeof tree === 'string' || typeof tree === 'number') {
@@ -80,9 +81,13 @@ export function textOf(tree: unknown): string {
   }
 
   const props: unknown = Reflect.get(tree, 'props')
-  const label = typeof props === 'object' && props ? Reflect.get(props, 'label') : undefined
+  const lead = (key: string) => {
+    const value: unknown = typeof props === 'object' && props ? Reflect.get(props, key) : undefined
 
-  return `${typeof label === 'string' ? label : ''}${textOf(Reflect.get(tree, 'children') ?? [])}`
+    return typeof value === 'string' ? value : ''
+  }
+
+  return `${lead('label')}${lead('text')}${textOf(Reflect.get(tree, 'children') ?? [])}`
 }
 
 const API = 'uds:/tmp/cc-socks/1.sock'
