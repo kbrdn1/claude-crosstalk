@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)"  srcset="docs/_assets/banner.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/_assets/banner-light.png">
+    <img alt="crosstalk — read and join what your Claude Code sessions tell each other" src="docs/_assets/banner.png" width="100%">
+  </picture>
+</p>
+
 # crosstalk
 
 A [Claude Mod](https://github.com/anthropics/claude-code/tree/main/mods) that
