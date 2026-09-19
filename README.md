@@ -51,9 +51,26 @@ A message held for approval (the two sessions run in different permission
 modes) already shows in the pane: crosstalk sees deliveries as they arrive,
 before the engine queues them.
 
-Not there yet: history across restarts (it lives in the session's memory),
-threads with subagents or teammates, remote (Remote Control / cloud) peers
-beyond what `ListAgents` reports.
+### History
+
+- **Kept**: every exchange is saved in the plugin's store under the session's
+  id, so a reload, a restart or a `--resume` finds the conversation as it
+  was, replies typed in the pane included. The 50 most recent sessions are
+  kept.
+- **Retroactive**: on a session's first start with crosstalk, the history is
+  rebuilt from the session's journal (`~/.claude/projects/…/<id>.jsonl`):
+  the messages peers sent it and the model's `SendMessage` calls, with their
+  times, including those from before the mod was installed. The plugin API
+  does not expose incoming peer messages (`$.session.messages()` hides them),
+  so this reads Claude Code's own journal format, which is undocumented: a
+  change there empties the rebuilt history and breaks nothing else. Replies
+  typed in a pane before crosstalk kept them are in no journal.
+- **Renames**: a session renamed keeps its conversation once it writes again
+  from the same socket, and a reply to a peer `ListAgents` no longer lists by
+  that name goes to the socket it last wrote from.
+
+Not there yet: threads with subagents or teammates, remote (Remote Control /
+cloud) peers beyond what `ListAgents` reports.
 
 ## Install
 

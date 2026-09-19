@@ -19,10 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field that sends through `SendMessage` (`ctrl+x tab` to focus it).
 - Peer list and statuses from `ListAgents`, refreshed every 15 s while the
   pane is open; an `unread` count in the status line while it is closed.
+- History: every exchange saved in `$.store` per session (reload, restart,
+  `--resume`), and on a session's first start the history rebuilt from its
+  journal, times included, messages from before the install too.
+- A renamed peer keeps its conversation; a reply to a peer no longer listed
+  by name goes to the socket it last wrote from.
 - Repo scaffolding: plugin and marketplace manifests, pinned plugin API
   declarations (`types/`), `Makefile` (`dev`, `ci`, `install`, `update`,
   `uninstall`, `types`), CI (typecheck, validate, test), tag-driven release,
   issue / PR templates, labels, contribution and TDD house rules.
+
+### Fixed
+
+- A `SendMessage` no session answered (`{ success: false }`) is no longer
+  drawn as sent; a refused reply says why in a toast.
 
 ## Past releases
 

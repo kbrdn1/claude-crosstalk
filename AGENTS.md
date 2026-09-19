@@ -43,10 +43,13 @@ Where tests go:
 - **The engine is the source of truth, not the docs.** Mods are early
   access; before relying on an event or a result shape, read it in
   `types/claude-code.d.ts`, and when behaviour matters, confirm it live with
-  `make dev` (a second session sending `SendMessage`). Two facts learnt that
+  `make dev` (a second session sending `SendMessage`). Facts learnt that
   way: a local peer's envelope names it by `from-name`, its `from` is a
   socket address; a plugin's own `$.tool.call` does not run through its own
-  `tool.call` hook.
+  `tool.call` hook; `$.session.messages()` hides peer deliveries (meta rows,
+  hence the journal read); a SendMessage nobody answers resolves
+  `{ success: false }`, not an error; session names change, sockets hold
+  for the life of the process.
 - **Record, never rewrite.** crosstalk observes `session.receive` and
   `tool.call`; it passes `e` on unchanged and never consumes a delivery.
 - **After a Claude Code update**: `make types`, then `make ci`. A diff in
