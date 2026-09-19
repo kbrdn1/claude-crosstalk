@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by name goes to the socket it last wrote from.
 - An inbox (one row a conversation: status, name, unread, time, last
   message) that opens each conversation; `‹` or `esc` back.
+- Vim motions: insert and normal modes in a conversation, `j k l g q` in the
+  inbox, `j k d u g i h q` in normal mode, drawn as the pane's legend.
 - Chat layout: messages grouped by side and day, Markdown bodies, your side
   on the right from 56 columns and stacked left below, a thread anchored on
   its newest message that the wheel and the scroll keys move while the

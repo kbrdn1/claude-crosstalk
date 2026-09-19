@@ -54,7 +54,12 @@ Where tests go:
   and a pane's digit hotkeys fire from an empty prompt too; redrawing away
   the element that holds the keys drops them to the prompt, and the pane
   can ask for them back only once they are there (`REFOCUS_MS`); a person's
-  close is `ui.close` with origin `person`, which the kit cannot raise.
+  close is `ui.close` with origin `person`, which the kit cannot raise;
+  a plugin's own `$.ui.focus` raises no `ui.focus` to it (note the ring when
+  the move succeeds), and the kit refuses it, so a view is tested as a pure
+  function over fake element constructors (`tests/view.test.ts`); a closure
+  drawn in a tree reads that draw's state, so what can move between two
+  draws (the ring) is read at the press, in `register.ts`.
 - **Record, never rewrite.** crosstalk observes `session.receive` and
   `tool.call`; it passes `e` on unchanged and never consumes a delivery.
 - **After a Claude Code update**: `make types`, then `make ci`. A diff in
