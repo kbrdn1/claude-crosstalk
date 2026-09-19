@@ -15,6 +15,7 @@ export const COLORS = {
   idle: '#86E89A',
   busy: '#FFDF61',
   muted: '#999999',
+  error: '#FF7A7A',
 } as const
 
 export type Kit = {
@@ -24,6 +25,7 @@ export type Kit = {
   isFocused: boolean
   back: number
   draft: string
+  notice?: string
   onSelect: (peer: string) => void
   onBack: (by: number) => void
   onInput: (text: string) => void
@@ -433,7 +435,9 @@ export function paneView(kit: Kit, thread: Thread.Thread): RenderElement {
         )}
       </Box>
 
-      {window.newer > 0 ? (
+      {kit.notice !== undefined ? (
+        <Text color={COLORS.error}>{truncate(`── ${kit.notice} `, kit.columns)}</Text>
+      ) : window.newer > 0 ? (
         <Button
           key="newer"
           label={ruleOf(kit.columns, `↓ ${window.newer} newer`)}

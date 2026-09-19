@@ -9,6 +9,9 @@ export const PANE_ID = 'crosstalk'
 // How often the open pane asks ListAgents who is around.
 export const REFRESH_MS = 15_000
 
+// How long after `/crosstalk` the pane asks for the keyboard again.
+export const FOCUS_RETRY_MS = 150
+
 const PEER_ORIGINS = { kind: ['peer', 'peer-send-message'] } as const
 
 // One store key a session: `thread:<session id>`.
@@ -25,6 +28,7 @@ export const MAX_SESSIONS = 50
 type Host = {
   now: () => Promise<number>
   every: (ms: number, fn: () => void) => Timer
+  after: (ms: number, fn: () => void) => Timer
   invalidate: () => void
   status: (text: string | undefined) => void
   open: () => Promise<void>
@@ -32,7 +36,6 @@ type Host = {
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
-  toast: (text: string) => void
 }
 
 /**
@@ -120,6 +123,8 @@ export const register: Register = on => {
   let draft = ''
   // How many messages the thread is scrolled back from its newest one.
   let back = 0
+  // Why the last reply did not go, shown in the pane until the next one.
+  let notice: string | undefined
 
   /**
    * The thread with a new message in it: drawn, and saved for the next start.
@@ -191,7 +196,9 @@ export const register: Register = on => {
     const refusal = refusalOf(result)
 
     if (refusal !== undefined) {
-      host.toast(`crosstalk · not sent: ${refusal}`)
+      // The open pane holds toasts back: the reason goes in the pane.
+      notice = `not sent: ${refusal}`
+      host.invalidate()
 
       return
     }
@@ -207,6 +214,7 @@ export const register: Register = on => {
     host = {
       now: () => $.clock.now(),
       every: (ms, fn) => $.clock.every(ms, fn),
+      after: (ms, fn) => $.clock.after(ms, fn),
       invalidate: () => $.ui.invalidate('ui.render'),
       status: text => $.ui.status(text),
       open: () =>
@@ -215,6 +223,7 @@ export const register: Register = on => {
           title: 'crosstalk',
           focus: true,
           closeOnEscape: true,
+          holdToasts: true,
           rows: 20,
           columns: 64,
         }),
@@ -222,7 +231,6 @@ export const register: Register = on => {
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
-      toast: text => $.ui.toast(text),
     }
 
     await $.command.register({
@@ -302,6 +310,11 @@ export const register: Register = on => {
     await host.open()
     isOpen = true
 
+    // Focus is granted over an empty composer only, and while this command
+    // runs the composer still holds `/crosstalk`: ask again once it cleared.
+    // Seen live: without this second open, the pane never takes the keys.
+    host.after(FOCUS_RETRY_MS, () => void host?.open().catch(() => undefined))
+
     if (thread.selected !== undefined) {
       thread = Thread.select(thread, thread.selected)
     }
@@ -368,8 +381,10 @@ export const register: Register = on => {
           draft = text
           host?.invalidate()
         },
+        notice,
         onSubmit: text => {
           draft = ''
+          notice = undefined
           void send(text)
         },
       },

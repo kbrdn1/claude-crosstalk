@@ -16,7 +16,6 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   const sent: ToolCallInput[] = []
   const opened: string[] = []
   const statuses: (string | undefined)[] = []
-  const toasts: string[] = []
   const runs: (readonly string[])[] = []
   const store = new Map(Object.entries(stored))
 
@@ -62,18 +61,13 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
     return { value: undefined }
   })
   on('ui.panes', () => ({ value: opened.map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })) }))
-  on('ui.toast', ($, e) => {
-    toasts.push(e.text)
-
-    return { value: undefined }
-  })
   on('ui.status', ($, e) => {
     statuses.push(e.text)
 
     return { value: undefined }
   })
 
-  return { sent, opened, statuses, toasts, runs, store, clock }
+  return { sent, opened, statuses, runs, store, clock }
 }
 
 describe('register', () => {
@@ -83,6 +77,11 @@ describe('register', () => {
     await $.session.start(SESSION)
     expect(await $.command.run(CROSSTALK)).toEqual({})
     expect(w.opened).toEqual(['crosstalk'])
+    await w.clock.advance(500)
+    expect(w.opened, 'asks for the keyboard again once the composer is empty').toEqual([
+      'crosstalk',
+      'crosstalk',
+    ])
 
 
     for (const surface of ['terminal', 'desktop'] as const) {
@@ -245,8 +244,12 @@ describe('register', () => {
     await w.clock.settle()
     await ui.redraw()
 
-    expect(textOf(await ui.drawn()), 'a refused reply is not drawn as sent').not.toContain('you there?')
-    expect(w.toasts).toEqual(['crosstalk · not sent: Not sent — no agent named gone is reachable.'])
+    const drawn = textOf(await ui.drawn())
+
+    expect(drawn, 'a refused reply is not drawn as sent').not.toContain('you there?')
+    expect(drawn, 'the reason shows in the pane, which holds toasts').toContain(
+      'not sent: Not sent — no agent named gone is reachable.',
+    )
   })
 
   test("a reply to a peer no longer listed goes to its socket", async ($, on) => {
