@@ -27,8 +27,18 @@ export type Kit = {
   draft: string
   notice?: string
   view: 'inbox' | 'thread'
+  // In a conversation: typing in the reply field, or moving (vim's modes).
+  mode: 'insert' | 'normal'
+  // The element the ring starts on when the pane takes the keyboard.
+  home: string
   onOpen: (peer: string) => void
   onInbox: () => void
+  // Inbox: the ring `delta` rows on, the row under it opened, the top row.
+  onMove: (delta: number) => void
+  onOpenHere: () => void
+  onTop: () => void
+  onInsert: () => void
+  onClose: () => void
   onBack: (by: number) => void
   onInput: (text: string) => void
   onSubmit: (text: string) => void
@@ -233,22 +243,93 @@ export function windowOf(
   return { entries: entries.slice(start, end), earlier: start, newer }
 }
 
-function hintOf(kit: Kit): string {
-  const isWide = kit.columns >= 48
+/**
+ * The row `delta` rows from the one holding the ring, held at the ends; the
+ * first row when the ring is on none.
+ */
+export function rowAfter(
+  rows: readonly string[],
+  ring: string | undefined,
+  delta: number,
+): string | undefined {
+  const at = ring === undefined ? -1 : rows.indexOf(ring)
 
-  if (kit.view === 'inbox') {
-    if (!kit.isFocused) {
-      return 'ctrl+x tab to choose'
-    }
-
-    return isWide ? '↑↓ choose · ⏎ open · esc close' : '⏎ open · esc close'
+  if (at < 0) {
+    return rows[0]
   }
 
+  return rows[Math.min(rows.length - 1, Math.max(0, at + delta))]
+}
+
+type Key = { hotkey: string; label: string; onPress: () => void }
+
+/**
+ * The keys that work now, as buttons: each is its own hotkey (a lowercase
+ * letter, while the pane holds the keyboard and no field does), drawn
+ * `j: ↓`, so the legend is the binding.
+ */
+function legend(kit: Kit, keys: readonly Key[]): RenderElement {
+  const { Box, Button } = kit.ui
+
+  return (
+    <Box flexWrap="wrap" columnGap={2}>
+      {keys.map(key => (
+        <Button
+          key={`vim:${key.hotkey}`}
+          label={key.label}
+          hotkey={key.hotkey}
+          plain
+          dimColor
+          onPress={key.onPress}
+        />
+      ))}
+    </Box>
+  )
+}
+
+function hintOf(kit: Kit, text: string): RenderElement {
+  const { Text } = kit.ui
+
+  return <Text dimColor>{truncate(text, kit.columns)}</Text>
+}
+
+function inboxKeys(kit: Kit): RenderElement {
   if (!kit.isFocused) {
-    return 'ctrl+x tab to reply'
+    return hintOf(kit, 'ctrl+x tab to choose')
   }
 
-  return isWide ? '⏎ send · ‹ or esc inbox' : '⏎ send · esc inbox'
+  // The ring moves between two draws: where it is now is the plugin's to
+  // read at the press, not this drawing's.
+  return legend(kit, [
+    { hotkey: 'j', label: '↓', onPress: () => kit.onMove(1) },
+    { hotkey: 'k', label: '↑', onPress: () => kit.onMove(-1) },
+    { hotkey: 'l', label: 'open', onPress: () => kit.onOpenHere() },
+    { hotkey: 'g', label: 'top', onPress: () => kit.onTop() },
+    { hotkey: 'q', label: 'close', onPress: () => kit.onClose() },
+  ])
+}
+
+function threadKeys(kit: Kit, shown: number, total: number): RenderElement {
+  if (!kit.isFocused) {
+    return hintOf(kit, 'ctrl+x tab to reply')
+  }
+
+  if (kit.mode === 'insert') {
+    return hintOf(kit, kit.columns >= 48 ? '⏎ send · esc normal mode' : '⏎ send · esc normal')
+  }
+
+  const half = Math.max(1, Math.ceil(shown / 2))
+
+  return legend(kit, [
+    { hotkey: 'j', label: '↓', onPress: () => kit.onBack(-1) },
+    { hotkey: 'k', label: '↑', onPress: () => kit.onBack(1) },
+    { hotkey: 'd', label: '⇣', onPress: () => kit.onBack(-half) },
+    { hotkey: 'u', label: '⇡', onPress: () => kit.onBack(half) },
+    { hotkey: 'g', label: 'latest', onPress: () => kit.onBack(-total) },
+    { hotkey: 'i', label: 'reply', onPress: () => kit.onInsert() },
+    { hotkey: 'h', label: 'inbox', onPress: () => kit.onInbox() },
+    { hotkey: 'q', label: 'close', onPress: () => kit.onClose() },
+  ])
 }
 
 function statusOf(thread: Thread.Thread, peer: string): { dot: string; color: string; status?: string } {
@@ -378,7 +459,7 @@ function inboxView(kit: Kit, thread: Thread.Thread): RenderElement {
                     key={`open:${conversation.peer}`}
                     label={fitName(conversation.peer, room)}
                     plain
-                    {...(i === 0 ? { autoFocus: true as const } : {})}
+                    {...(`open:${conversation.peer}` === kit.home ? { autoFocus: true as const } : {})}
                     onPress={() => kit.onOpen(conversation.peer)}
                   />
                 </Box>
@@ -395,7 +476,7 @@ function inboxView(kit: Kit, thread: Thread.Thread): RenderElement {
         })
       )}
       {rule(kit)}
-      <Text dimColor>{truncate(hintOf(kit), kit.columns)}</Text>
+      {inboxKeys(kit)}
     </Box>
   )
 }
@@ -424,7 +505,13 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
     <Box flexDirection="column" width={kit.columns} marginLeft={1}>
       <Box justifyContent="space-between">
         <Box>
-          <Button key="back" label="‹" plain onPress={() => kit.onInbox()} />
+          <Button
+            key="back"
+            label="‹"
+            plain
+            {...(kit.home === 'back' ? { autoFocus: true as const } : {})}
+            onPress={() => kit.onInbox()}
+          />
           <Text>
             <Text bold color={COLORS.peer}>{` ${name}`}</Text>
             <Text color={color}>{status ? ` · ${status}` : ''}</Text>
@@ -479,14 +566,14 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
           key="reply"
           placeholder={`message ${selected}…`}
           submitLabel="send"
-          autoFocus
+          {...(kit.home === 'reply' ? { autoFocus: true as const } : {})}
           value={kit.draft}
           onInput={value => kit.onInput(value)}
           onSubmit={value => kit.onSubmit(value)}
         />
       </Box>
 
-      <Text dimColor>{truncate(hintOf(kit), kit.columns)}</Text>
+      {threadKeys(kit, window.entries.length, all.length)}
     </Box>
   )
 }
