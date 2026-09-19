@@ -63,8 +63,9 @@ Where tests go:
 
 - **The engine is the source of truth, not the docs.** Mods are early
   access: read an event's shape in `types/claude-code.d.ts`, and confirm
-  behaviour live with `make dev` and a second session sending
-  `SendMessage`. Learnt that way:
+  behaviour live in a real session sent real `SendMessage`s: the
+  `live-check` skill (`.claude/skills/live-check/`) drives one in tmux.
+  Learnt that way:
   - A local peer's envelope names it by `from-name`; its `from` is a socket
     address. Session names change; sockets last as long as the process.
   - A plugin's own `$.tool.call` and `$.ui.focus` do not run through its own
