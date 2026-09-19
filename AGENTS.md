@@ -51,7 +51,10 @@ Where tests go:
   `{ success: false }`, not an error; session names change, sockets hold
   for the life of the process; a pane takes the keyboard only opened as a
   dialog (`focus`, `closeOnEscape`, `holdToasts`) over an empty composer,
-  and a pane's digit hotkeys fire from an empty prompt too.
+  and a pane's digit hotkeys fire from an empty prompt too; redrawing away
+  the element that holds the keys drops them to the prompt, and the pane
+  can ask for them back only once they are there (`REFOCUS_MS`); a person's
+  close is `ui.close` with origin `person`, which the kit cannot raise.
 - **Record, never rewrite.** crosstalk observes `session.receive` and
   `tool.call`; it passes `e` on unchanged and never consumes a delivery.
 - **After a Claude Code update**: `make types`, then `make ci`. A diff in

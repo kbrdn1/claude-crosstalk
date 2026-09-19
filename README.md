@@ -6,25 +6,36 @@ and join: `/crosstalk` opens a pane with this session's exchanges with your
 other Claude Code sessions, and a field to answer them yourself.
 
 ```
-│ crosstalk                              ● claude-crosstalk-d1  ✕
-│ 1: cl…e-98  2: cl…e-9f  3: cr…tart  4: cl…talk  5: he…a-4e
-│ ────────────────────────────────────────────────────────────
-│ ──────────────────────── sat 19 sep ────────────────────────
+│ crosstalk                               ● claude-crosstalk-33  ✕
+│ ─────────────────────────────────────────────────────────────
+│ ○ claude-98                                             02:04
+│   you: via le socket
+│
+│ ● claude-flow
+│   no message yet
+│
+│ ● crimson-desert-start
+│   no message yet
+│ ─────────────────────────────────────────────────────────────
+│ ↑↓ choose · ⏎ open · esc close
+```
+
+```
+│ ‹ claude-98                                                   ✕
+│ ─────────────────────────────────────────────────────────────
+│ ──────────────────────── sat 19 sep ─────────────────────────
 │ claude-98 · 01:28
 │ ┃ Démo crosstalk depuis claude-98 : réponds-moi
 │ ┃ une phrase courte via SendMessage à claude-98
 │ ┃ (rien d'autre, pas d'outil en plus).
 │
-│ ┃ Bien reçu ton pong depuis le pane crosstalk.
-│ ┃ Rien à faire de ton côté, c'est juste pour la
-│ ┃ démo.
+│                                                   you · 02:01
+│                                           réponse persistée ┃
 │
-│                                                  you · 02:01
-│                                          réponse persistée ┃
-│                                              via le socket ┃
-│ ────────────────────────────────────────────────────────────
+│                                               via le socket ┃
+│ ─────────────────────────────────────────────────────────────
 │ ❯ message claude-98…
-│ ⏎ send · tab conversations · 1-9 switch · esc close
+│ ⏎ send · ‹ or esc inbox
 ```
 
 > ⚠️ **Early access.** Mods run on Claude Code's function hooks, which are
@@ -42,21 +53,25 @@ sessions on one machine talk. crosstalk adds the part you see:
   `peer-send-message`) is recorded under the sender's name, unchanged.
 - **Outgoing**: every `SendMessage` this session makes (`tool.call`) is
   recorded under its recipient, unchanged.
-- **The pane** (`/crosstalk`, again to close): one numbered tab a
-  conversation (and each idle local session), the selected thread anchored
-  on its newest message, grouped by side and day with Markdown bodies, and a
-  reply field that sends through `SendMessage`. It lays out for its width:
-  your messages on the right from 56 columns, both sides stacked left below,
-  tab names cut in their middle, `+N` for the tabs that do not fit.
+- **The pane** (`/crosstalk`, again to close) opens on an **inbox**: one row
+  a conversation (and each idle local session), most recent first, with its
+  status, its name whole, its unread count, its time and its last message.
+  ⏎ opens the **conversation**: the thread anchored on its newest message,
+  grouped by side and day with Markdown bodies, and a reply field that sends
+  through `SendMessage`; `✉ N` in its header counts what arrived elsewhere.
+  It lays out for its width: your messages on the right from 56 columns,
+  both sides stacked left below, a line never past 72 columns.
 - **Unread**: while the pane is closed, the status line counts the messages
   nobody looked at.
 
-Keys: `/crosstalk` opens the pane with the keyboard in its reply field;
-`enter` sends, `1`–`9` switch conversation, `tab` walks the tabs, the wheel
-or `PageUp`/`PageDown` scroll the thread (the header and the reply field
-stay), `esc` closes, `ctrl+x tab` goes back and forth with the prompt. The
-pane docks beside the transcript in the fullscreen layout from 110 columns
-(`ctrl+x ←/→` resizes it), inline above the prompt otherwise.
+Keys: `/crosstalk` opens the pane with the keyboard. In the inbox, `↑`/`↓`
+choose and `⏎` opens; in a conversation, `⏎` sends, the wheel or
+`PageUp`/`PageDown` scroll the thread (the header and the reply field stay)
+and `‹` or `esc` go back to the inbox; `esc` in the inbox closes, and
+`ctrl+x tab` goes back and forth with the prompt. Each conversation keeps
+its own draft. The pane docks beside the transcript in the fullscreen layout
+from 110 columns (`ctrl+x ←/→` resizes it), inline above the prompt
+otherwise.
 
 A message held for approval (the two sessions run in different permission
 modes) already shows in the pane: crosstalk sees deliveries as they arrive,
