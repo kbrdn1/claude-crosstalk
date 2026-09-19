@@ -26,17 +26,12 @@ export type Kit = {
   back: number
   draft: string
   notice?: string
-  onSelect: (peer: string) => void
+  view: 'inbox' | 'thread'
+  onOpen: (peer: string) => void
+  onInbox: () => void
   onBack: (by: number) => void
   onInput: (text: string) => void
   onSubmit: (text: string) => void
-}
-
-export type Tab = {
-  peer: string
-  label: string
-  hotkey: string
-  isSelected: boolean
 }
 
 export type Group = {
@@ -46,17 +41,14 @@ export type Group = {
   entries: Thread.Entry[]
 }
 
-// Header, tabs, two rules, reply field, hints.
-const CHROME_ROWS = 6
+// Header, two rules, reply field, hints.
+const CHROME_ROWS = 5
 // Below this many columns both sides stack on the left.
 const SPLIT_MIN_COLUMNS = 56
 // A bubble never gets wider: a line past this reads badly.
 const MAX_BUBBLE = 72
 // A pause longer than this starts a new group.
 const GROUP_GAP_MS = 5 * 60_000
-const MAX_TABS = 9
-const TAB_GAP = 2
-const MIN_LABEL = 6
 const MAX_MARKDOWN = 10_000
 
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
@@ -86,10 +78,11 @@ function truncate(text: string, max: number): string {
 }
 
 /**
- * `text` cut in its middle to `max` cells: session names share their start
- * (`claude-…`) and differ at their end, so both ends stay.
+ * A session name cut in its middle to `max` cells, whole when it fits:
+ * names share their start (`claude-…`) and differ at their end, so both
+ * ends stay.
  */
-function truncateMiddle(text: string, max: number): string {
+export function fitName(text: string, max: number): string {
   if (text.length <= max || max < 5) {
     return truncate(text, max)
   }
@@ -113,52 +106,17 @@ export function layoutOf(columns: number): { isSplit: boolean; bubble: number } 
 }
 
 /**
- * The cells a row of tabs takes: `1: label` each, two apart, and `+N` for
- * the hidden ones.
+ * What an inbox row says under a conversation's name: its last message's
+ * first line, `you: ` before yours, cut to `width`.
  */
-export function tabsWidthOf(tabs: readonly Tab[], hidden: number): number {
-  const drawn = tabs.reduce((sum, tab) => sum + tab.hotkey.length + 2 + tab.label.length, 0)
-  const gaps = Math.max(0, tabs.length - 1) * TAB_GAP
-  const more = hidden > 0 ? TAB_GAP + `+${hidden}`.length : 0
-
-  return drawn + gaps + more
-}
-
-/**
- * The tabs that fit `columns`: every conversation up to nine, names cut to
- * share the row, then the last ones hidden behind `+N` until each keeps
- * MIN_LABEL cells. The selected one stays in view.
- */
-export function tabsOf(
-  conversations: readonly Thread.Conversation[],
-  selected: string | undefined,
-  columns: number,
-): { tabs: Tab[]; hidden: number } {
-  const all = conversations.slice(0, MAX_TABS)
-
-  for (let count = all.length; count > 0; count--) {
-    const kept = all.slice(0, count)
-    const chosen = kept.some(c => c.peer === selected)
-      ? kept
-      : [...kept.slice(0, -1), ...all.filter(c => c.peer === selected)]
-    const hidden = conversations.length - chosen.length
-    const more = hidden > 0 ? TAB_GAP + `+${hidden}`.length : 0
-    const room = columns - more - (chosen.length - 1) * TAB_GAP - chosen.length * 3
-    const share = Math.floor(room / chosen.length)
-
-    if (share >= MIN_LABEL || count === 1) {
-      const tabs = chosen.map((c, i) => {
-        const badge = c.unread > 0 ? ` ·${c.unread}` : ''
-        const label = `${truncateMiddle(c.peer, Math.max(1, share - badge.length))}${badge}`
-
-        return { peer: c.peer, label, hotkey: String(i + 1), isSelected: c.peer === selected }
-      })
-
-      return { tabs, hidden }
-    }
+export function previewOf(last: Thread.Entry | undefined, width: number): string {
+  if (last === undefined) {
+    return 'no message yet'
   }
 
-  return { tabs: [], hidden: conversations.length }
+  const line = last.text.split('\n').find(part => part.trim() !== '') ?? ''
+
+  return truncate(`${last.dir === 'out' ? 'you: ' : ''}${line.trim()}`, Math.max(1, width))
 }
 
 /**
@@ -276,13 +234,32 @@ export function windowOf(
 }
 
 function hintOf(kit: Kit): string {
+  const isWide = kit.columns >= 48
+
+  if (kit.view === 'inbox') {
+    if (!kit.isFocused) {
+      return 'ctrl+x tab to choose'
+    }
+
+    return isWide ? '↑↓ choose · ⏎ open · esc close' : '⏎ open · esc close'
+  }
+
   if (!kit.isFocused) {
     return 'ctrl+x tab to reply'
   }
 
-  return kit.columns >= 48
-    ? '⏎ send · tab conversations · 1-9 switch · esc close'
-    : '⏎ send · esc close'
+  return isWide ? '⏎ send · ‹ or esc inbox' : '⏎ send · esc inbox'
+}
+
+function statusOf(thread: Thread.Thread, peer: string): { dot: string; color: string; status?: string } {
+  const status = thread.peers.find(listed => listed.name === peer)?.status
+
+  if (status === 'idle') return { dot: '●', color: COLORS.idle, status }
+  if (status === 'busy') return { dot: '●', color: COLORS.busy, status }
+
+  return status === undefined
+    ? { dot: '○', color: COLORS.muted }
+    : { dot: '○', color: COLORS.muted, status }
 }
 
 /**
@@ -353,55 +330,110 @@ function groupView(kit: Kit, group: Group, width: number): RenderElement {
   )
 }
 
+function header(kit: Kit, thread: Thread.Thread): RenderElement {
+  const { Box, Text } = kit.ui
+  const self = thread.self && kit.columns >= 40 ? `● ${thread.self}` : ''
+
+  return (
+    <Box justifyContent="space-between">
+      <Text bold color={COLORS.accent}>
+        crosstalk
+      </Text>
+      <Text dimColor>{truncate(self, Math.max(0, kit.columns - 12))}</Text>
+    </Box>
+  )
+}
+
 /**
- * The crosstalk pane's body, laid out for `kit.columns`: a header, one tab a
- * conversation, the selected thread anchored on its newest message, the
+ * The inbox: one row a conversation, most recent first, each with its
+ * status, its name whole, its unread count and time, and its last message.
+ */
+function inboxView(kit: Kit, thread: Thread.Thread): RenderElement {
+  const { Box, Text, Button } = kit.ui
+  const conversations = Thread.conversationsOf(thread)
+
+  return (
+    <Box flexDirection="column" width={kit.columns} marginLeft={1}>
+      {header(kit, thread)}
+      {rule(kit)}
+      {conversations.length === 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>No other session reachable yet.</Text>
+          <Text dimColor>Start one: it shows up here.</Text>
+        </Box>
+      ) : (
+        conversations.map((conversation, i) => {
+          const { dot, color } = statusOf(thread, conversation.peer)
+          const time = conversation.last?.at === undefined ? '' : clockOf(conversation.last.at)
+          const badge = conversation.unread > 0 ? String(conversation.unread) : ''
+          const side = (badge ? badge.length + 2 : 0) + time.length
+          const room = Math.max(4, kit.columns - 2 - side - 1)
+
+          return (
+            <Box flexDirection="column" marginTop={i === 0 ? 0 : 1}>
+              <Box justifyContent="space-between">
+                <Box>
+                  <Text color={color}>{`${dot} `}</Text>
+                  <Button
+                    key={`open:${conversation.peer}`}
+                    label={fitName(conversation.peer, room)}
+                    plain
+                    {...(i === 0 ? { autoFocus: true as const } : {})}
+                    onPress={() => kit.onOpen(conversation.peer)}
+                  />
+                </Box>
+                <Text>
+                  <Text bold color={COLORS.accent}>
+                    {badge ? `${badge}  ` : ''}
+                  </Text>
+                  <Text dimColor>{time}</Text>
+                </Text>
+              </Box>
+              <Text dimColor>{`  ${previewOf(conversation.last, kit.columns - 2)}`}</Text>
+            </Box>
+          )
+        })
+      )}
+      {rule(kit)}
+      <Text dimColor>{truncate(hintOf(kit), kit.columns)}</Text>
+    </Box>
+  )
+}
+
+/**
+ * One conversation, laid out for `kit.columns`: its header (‹ back, name,
+ * status, unread elsewhere), the thread anchored on its newest message, the
  * reply field and the keys that work now.
  */
-export function paneView(kit: Kit, thread: Thread.Thread): RenderElement {
+function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
   const { Box, Text, Button, Input } = kit.ui
-  const conversations = Thread.conversationsOf(thread)
-  const selected = thread.selected ?? conversations[0]?.peer
-  const { tabs, hidden } = tabsOf(conversations, selected, kit.columns)
+  const selected = thread.selected ?? ''
+  const { color, status } = statusOf(thread, selected)
+  const elsewhere = Object.entries(thread.unread)
+    .filter(([peer]) => peer !== selected)
+    .reduce((sum, [, count]) => sum + count, 0)
   const { bubble } = layoutOf(kit.columns)
   const text = Math.max(1, bubble - 2)
   const threadRows = Math.max(3, kit.rows - CHROME_ROWS)
   const all = Thread.messagesWith(thread, selected)
   const window = windowOf(all, threadRows, kit.back, text)
-  const self = thread.self && kit.columns >= 40 ? `● ${thread.self}` : ''
+  const badge = elsewhere > 0 ? `✉ ${elsewhere}` : ''
+  const name = fitName(selected, Math.max(4, kit.columns - 4 - (status ? status.length + 3 : 0) - badge.length - 2))
 
   return (
     <Box flexDirection="column" width={kit.columns} marginLeft={1}>
       <Box justifyContent="space-between">
-        <Text bold color={COLORS.accent}>
-          crosstalk
-        </Text>
-        <Text dimColor>{truncate(self, Math.max(0, kit.columns - 12))}</Text>
-      </Box>
-
-      {tabs.length === 0 ? (
-        <Text dimColor>no conversation yet</Text>
-      ) : (
         <Box>
-          {tabs.map((tab, i) => (
-            <Box marginLeft={i === 0 ? 0 : TAB_GAP}>
-              <Button
-                key={`tab:${tab.peer}`}
-                label={tab.label}
-                hotkey={tab.hotkey}
-                plain
-                {...(tab.isSelected ? {} : { dimColor: true })}
-                onPress={() => kit.onSelect(tab.peer)}
-              />
-            </Box>
-          ))}
-          {hidden > 0 ? (
-            <Box marginLeft={TAB_GAP}>
-              <Text dimColor>{`+${hidden}`}</Text>
-            </Box>
-          ) : null}
+          <Button key="back" label="‹" plain onPress={() => kit.onInbox()} />
+          <Text>
+            <Text bold color={COLORS.peer}>{` ${name}`}</Text>
+            <Text color={color}>{status ? ` · ${status}` : ''}</Text>
+          </Text>
         </Box>
-      )}
+        <Text bold color={COLORS.accent}>
+          {badge}
+        </Text>
+      </Box>
 
       {window.earlier > 0 ? (
         <Button
@@ -415,20 +447,10 @@ export function paneView(kit: Kit, thread: Thread.Thread): RenderElement {
         rule(kit)
       )}
 
-      <Box
-        height={threadRows}
-        flexDirection="column"
-        justifyContent="flex-end"
-        overflow="hidden"
-      >
-        {conversations.length === 0 ? (
-          <Box flexDirection="column" alignItems="center">
-            <Text dimColor>No other session reachable yet.</Text>
-            <Text dimColor>Start one: it shows up here.</Text>
-          </Box>
-        ) : all.length === 0 ? (
+      <Box height={threadRows} flexDirection="column" justifyContent="flex-end" overflow="hidden">
+        {all.length === 0 ? (
           <Box justifyContent="center">
-            <Text dimColor>{`No message with ${selected ?? 'them'} yet. Say hi below.`}</Text>
+            <Text dimColor>{`No message with ${selected} yet. Say hi below.`}</Text>
           </Box>
         ) : (
           groupsOf(window.entries).map(group => groupView(kit, group, text))
@@ -449,26 +471,31 @@ export function paneView(kit: Kit, thread: Thread.Thread): RenderElement {
         rule(kit)
       )}
 
-      {selected === undefined ? (
-        <Text> </Text>
-      ) : (
-        <Box>
-          <Text bold color={COLORS.accent}>
-            {'❯ '}
-          </Text>
-          <Input
-            key="reply"
-            placeholder={`message ${selected}…`}
-            submitLabel="send"
-            autoFocus
-            value={kit.draft}
-            onInput={value => kit.onInput(value)}
-            onSubmit={value => kit.onSubmit(value)}
-          />
-        </Box>
-      )}
+      <Box>
+        <Text bold color={COLORS.accent}>
+          {'❯ '}
+        </Text>
+        <Input
+          key="reply"
+          placeholder={`message ${selected}…`}
+          submitLabel="send"
+          autoFocus
+          value={kit.draft}
+          onInput={value => kit.onInput(value)}
+          onSubmit={value => kit.onSubmit(value)}
+        />
+      </Box>
 
       <Text dimColor>{truncate(hintOf(kit), kit.columns)}</Text>
     </Box>
   )
+}
+
+/**
+ * The crosstalk pane's body: the inbox, or the conversation opened from it.
+ */
+export function paneView(kit: Kit, thread: Thread.Thread): RenderElement {
+  return kit.view === 'thread' && thread.selected !== undefined
+    ? threadView(kit, thread)
+    : inboxView(kit, thread)
 }
