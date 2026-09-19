@@ -150,13 +150,15 @@ loaded as a mod.
 ## Develop
 
 Requires Claude Code (a build that carries function hooks), `bun` (for
-`tsc`) and `jq`.
+`tsc`, oxlint and oxfmt) and `jq`.
 
 ```bash
 make test       # claude plugin test .
 make typecheck  # tsc against types/
+make lint       # oxlint
+make fmt        # oxfmt, in place (make fmt-check to only check)
 make validate   # claude plugin validate
-make ci         # all three
+make ci         # fmt-check, lint, typecheck, validate, test
 make types      # regenerate types/ after a Claude Code update
 ```
 

@@ -20,8 +20,10 @@ hooks module (`hooks/register.ts`, `register(on, options)`, hooks
 
 ## Commands
 
-- `make ci` before every push: `typecheck` (`bunx -p typescript@5.9.3 tsc`,
-  needs `bun`), `validate`, `test`.
+- `make ci` before every push: `fmt-check` (oxfmt), `lint` (oxlint),
+  `typecheck` (tsc), `validate`, `test`. The first three run through
+  `bunx` at versions pinned in the Makefile: they need `bun`, nothing is
+  installed in the repo. `make fmt` rewrites hooks/ and tests/ in place.
 - Outside `make`, `claude plugin test .` and `claude plugin validate .` need
   `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`. `claude plugin test` runs every
   `*.test.ts*`: there is no single-test filter.
@@ -86,9 +88,10 @@ Where tests go:
   `changelogs/<version>.md` (or `changelogs/pre-releases/<version>.md`) and
   fails when it is missing. `.claude-plugin/plugin.json` `version` must
   equal the tag.
-- **Style** (no formatter: match the files): 2 spaces, no semicolons,
-  single quotes, `import type` for types. A hooks module has no DOM and no
-  Node: every effect goes through `$`.
+- **Style**: oxfmt owns the layout (`.oxfmtrc.json`: 2 spaces, no
+  semicolons, single quotes, 100 columns); run `make fmt`, never hand-align.
+  Use `import type` for types. A hooks module has no DOM and no Node: every
+  effect goes through `$`.
 - **Git**: branches `<type>/#<issue>-<description>` (`#0` without an issue),
   Gitmoji + Conventional Commits, merge commits only (never squash, never
   delete the branch). Details in [CONTRIBUTING.md](CONTRIBUTING.md).

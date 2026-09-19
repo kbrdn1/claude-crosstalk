@@ -17,7 +17,8 @@
 
 - Claude Code, a build that carries function hooks (the one named on the
   first line of `types/claude-code.d.ts`, or newer after `make types`).
-- `bun` (runs `tsc` through `bunx`, nothing installed in the repo) and `jq`.
+- `bun` (runs `tsc`, `oxlint` and `oxfmt` through `bunx`, at versions pinned
+  in the Makefile; nothing installed in the repo) and `jq`.
 
 ### Run it
 
@@ -31,7 +32,10 @@ by the name `ListAgents` gives it.
 
 ### Code style
 
-2 spaces, no semicolons, single quotes, `import type` for types. A hooks
+`make fmt` (oxfmt, `.oxfmtrc.json`) owns the layout: 2 spaces, no
+semicolons, single quotes, 100 columns. `make lint` runs oxlint
+(`.oxlintrc.json`, correctness rules as errors). Both cover `hooks/` and
+`tests/`, never the generated `types/`. Use `import type` for types. A hooks
 module has no DOM and no Node: web APIs only, every effect through `$`.
 
 ## Testing
@@ -39,8 +43,8 @@ module has no DOM and no Node: web APIs only, every effect through `$`.
 ### 🔴 TDD is mandatory — non-negotiable
 
 See [CLAUDE.md](CLAUDE.md#-primordial-rule--test-driven-development-is-mandatory).
-`make ci` runs typecheck, `claude plugin validate` and `claude plugin test`;
-it must be green before a push.
+`make ci` runs `fmt-check`, `lint`, `typecheck`, `claude plugin validate` and
+`claude plugin test`; it must be green before a push.
 
 ## Branches
 
