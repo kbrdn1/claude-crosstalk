@@ -43,10 +43,23 @@ Where tests go:
 - **The engine is the source of truth, not the docs.** Mods are early
   access; before relying on an event or a result shape, read it in
   `types/claude-code.d.ts`, and when behaviour matters, confirm it live with
-  `make dev` (a second session sending `SendMessage`). Two facts learnt that
+  `make dev` (a second session sending `SendMessage`). Facts learnt that
   way: a local peer's envelope names it by `from-name`, its `from` is a
   socket address; a plugin's own `$.tool.call` does not run through its own
-  `tool.call` hook.
+  `tool.call` hook; `$.session.messages()` hides peer deliveries (meta rows,
+  hence the journal read); a SendMessage nobody answers resolves
+  `{ success: false }`, not an error; session names change, sockets hold
+  for the life of the process; a pane takes the keyboard only opened as a
+  dialog (`focus`, `closeOnEscape`, `holdToasts`) over an empty composer,
+  and a pane's digit hotkeys fire from an empty prompt too; redrawing away
+  the element that holds the keys drops them to the prompt, and the pane
+  can ask for them back only once they are there (`REFOCUS_MS`); a person's
+  close is `ui.close` with origin `person`, which the kit cannot raise;
+  a plugin's own `$.ui.focus` raises no `ui.focus` to it (note the ring when
+  the move succeeds), and the kit refuses it, so a view is tested as a pure
+  function over fake element constructors (`tests/view.test.ts`); a closure
+  drawn in a tree reads that draw's state, so what can move between two
+  draws (the ring) is read at the press, in `register.ts`.
 - **Record, never rewrite.** crosstalk observes `session.receive` and
   `tool.call`; it passes `e` on unchanged and never consumes a delivery.
 - **After a Claude Code update**: `make types`, then `make ci`. A diff in

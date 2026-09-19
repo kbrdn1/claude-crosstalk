@@ -10,15 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Repo scaffolding: plugin and marketplace manifests, pinned plugin API
-  declarations (`types/`), `Makefile` (`dev`, `ci`, `install`, `update`,
-  `uninstall`, `types`), CI (typecheck, validate, test), tag-driven release,
-  issue / PR templates, labels, contribution and TDD house rules.
-
 ## Past releases
 
 In reverse chronological order:
 
-_(none yet)_
+- [`0.1.0`](changelogs/0.1.0.md), 2026-09-19
