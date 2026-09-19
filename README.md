@@ -6,19 +6,25 @@ and join: `/crosstalk` opens a pane with this session's exchanges with your
 other Claude Code sessions, and a field to answer them yourself.
 
 ```
-│ crosstalk  you are claude-crosstalk-b2            3 sessions  ✕
-│ conversation: claude-98  busy ▾
-│ ╭──────────────────────────────────────────────────────────╮
-│ │ claude-98  ● busy                                        │
-│ │                                                          │
-│ │ → you  01:30                                             │
-│ │ pong depuis le pane                                      │
-│ │                                                          │
-│ │ ← claude-98  01:30                                       │
-│ │ Bien reçu ton pong depuis le pane crosstalk.             │
-│ ╰──────────────────────────────────────────────────────────╯
-│ reply: message to claude-98 ⏎ send
-│ tab: move · enter: send · esc: close
+│ crosstalk                              ● claude-crosstalk-d1  ✕
+│ 1: cl…e-98  2: cl…e-9f  3: cr…tart  4: cl…talk  5: he…a-4e
+│ ────────────────────────────────────────────────────────────
+│ ──────────────────────── sat 19 sep ────────────────────────
+│ claude-98 · 01:28
+│ ┃ Démo crosstalk depuis claude-98 : réponds-moi
+│ ┃ une phrase courte via SendMessage à claude-98
+│ ┃ (rien d'autre, pas d'outil en plus).
+│
+│ ┃ Bien reçu ton pong depuis le pane crosstalk.
+│ ┃ Rien à faire de ton côté, c'est juste pour la
+│ ┃ démo.
+│
+│                                                  you · 02:01
+│                                          réponse persistée ┃
+│                                              via le socket ┃
+│ ────────────────────────────────────────────────────────────
+│ ❯ message claude-98…
+│ ⏎ send · tab conversations · 1-9 switch · esc close
 ```
 
 > ⚠️ **Early access.** Mods run on Claude Code's function hooks, which are
@@ -36,16 +42,21 @@ sessions on one machine talk. crosstalk adds the part you see:
   `peer-send-message`) is recorded under the sender's name, unchanged.
 - **Outgoing**: every `SendMessage` this session makes (`tool.call`) is
   recorded under its recipient, unchanged.
-- **The pane** (`/crosstalk`, again to close): a picker over the
-  conversations and the idle local sessions, the selected conversation's last
-  messages, and a reply field that sends through `SendMessage`.
+- **The pane** (`/crosstalk`, again to close): one numbered tab a
+  conversation (and each idle local session), the selected thread anchored
+  on its newest message, grouped by side and day with Markdown bodies, and a
+  reply field that sends through `SendMessage`. It lays out for its width:
+  your messages on the right from 56 columns, both sides stacked left below,
+  tab names cut in their middle, `+N` for the tabs that do not fit.
 - **Unread**: while the pane is closed, the status line counts the messages
   nobody looked at.
 
-Keys: `ctrl+x tab` gives the pane the keyboard (the reply field has it
-first), `tab` moves to the conversation picker, `enter` sends, `esc` closes.
-The pane docks beside the transcript in the fullscreen layout from 110
-columns, inline above the prompt otherwise.
+Keys: `/crosstalk` opens the pane with the keyboard in its reply field;
+`enter` sends, `1`–`9` switch conversation, `tab` walks the tabs, the wheel
+or `PageUp`/`PageDown` scroll the thread (the header and the reply field
+stay), `esc` closes, `ctrl+x tab` goes back and forth with the prompt. The
+pane docks beside the transcript in the fullscreen layout from 110 columns
+(`ctrl+x ←/→` resizes it), inline above the prompt otherwise.
 
 A message held for approval (the two sessions run in different permission
 modes) already shows in the pane: crosstalk sees deliveries as they arrive,

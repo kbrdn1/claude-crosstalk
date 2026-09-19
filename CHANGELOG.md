@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   journal, times included, messages from before the install too.
 - A renamed peer keeps its conversation; a reply to a peer no longer listed
   by name goes to the socket it last wrote from.
+- Chat layout: numbered tabs (`1`–`9`), messages grouped by side and day,
+  Markdown bodies, your side on the right from 56 columns and stacked left
+  below, a thread anchored on its newest message that the wheel and the
+  scroll keys move while the header and the reply field stay.
 - Repo scaffolding: plugin and marketplace manifests, pinned plugin API
   declarations (`types/`), `Makefile` (`dev`, `ci`, `install`, `update`,
   `uninstall`, `types`), CI (typecheck, validate, test), tag-driven release,
@@ -32,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A `SendMessage` no session answered (`{ success: false }`) is no longer
-  drawn as sent; a refused reply says why in a toast.
+  drawn as sent; a refused reply says why in the pane.
+- `/crosstalk` opens the pane with the keyboard: typing went to the prompt.
 
 ## Past releases
 

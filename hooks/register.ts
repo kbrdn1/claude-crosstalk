@@ -9,6 +9,9 @@ export const PANE_ID = 'crosstalk'
 // How often the open pane asks ListAgents who is around.
 export const REFRESH_MS = 15_000
 
+// How long after `/crosstalk` the pane asks for the keyboard again.
+export const FOCUS_RETRY_MS = 150
+
 const PEER_ORIGINS = { kind: ['peer', 'peer-send-message'] } as const
 
 // One store key a session: `thread:<session id>`.
@@ -25,6 +28,7 @@ export const MAX_SESSIONS = 50
 type Host = {
   now: () => Promise<number>
   every: (ms: number, fn: () => void) => Timer
+  after: (ms: number, fn: () => void) => Timer
   invalidate: () => void
   status: (text: string | undefined) => void
   open: () => Promise<void>
@@ -32,7 +36,6 @@ type Host = {
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
-  toast: (text: string) => void
 }
 
 /**
@@ -118,6 +121,10 @@ export const register: Register = on => {
   let replying: string | undefined
   // What the person has typed in the reply field so far.
   let draft = ''
+  // How many messages the thread is scrolled back from its newest one.
+  let back = 0
+  // Why the last reply did not go, shown in the pane until the next one.
+  let notice: string | undefined
 
   /**
    * The thread with a new message in it: drawn, and saved for the next start.
@@ -129,6 +136,27 @@ export const register: Register = on => {
       ?.now()
       .then(now => host?.save(Thread.toSaved(thread, now)))
       .catch(() => undefined)
+  }
+
+  /**
+   * Scrolls the selected thread `by` messages back (negative: forward),
+   * within its messages.
+   */
+  function scrollBack(by: number): void {
+    const count = Thread.messagesWith(thread, thread.selected).length
+
+    back = Math.min(Math.max(0, back + by), Math.max(0, count - 1))
+    host?.invalidate()
+  }
+
+  /**
+   * Keeps the reader where they are when a message lands in the conversation
+   * they have scrolled back in.
+   */
+  function holdPlace(peer: string): void {
+    if (back > 0 && peer === thread.selected) {
+      back += 1
+    }
   }
 
   function redraw(): void {
@@ -168,11 +196,14 @@ export const register: Register = on => {
     const refusal = refusalOf(result)
 
     if (refusal !== undefined) {
-      host.toast(`crosstalk · not sent: ${refusal}`)
+      // The open pane holds toasts back: the reason goes in the pane.
+      notice = `not sent: ${refusal}`
+      host.invalidate()
 
       return
     }
 
+    back = 0
     await commit(Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }))
   }
 
@@ -183,6 +214,7 @@ export const register: Register = on => {
     host = {
       now: () => $.clock.now(),
       every: (ms, fn) => $.clock.every(ms, fn),
+      after: (ms, fn) => $.clock.after(ms, fn),
       invalidate: () => $.ui.invalidate('ui.render'),
       status: text => $.ui.status(text),
       open: () =>
@@ -191,6 +223,7 @@ export const register: Register = on => {
           title: 'crosstalk',
           focus: true,
           closeOnEscape: true,
+          holdToasts: true,
           rows: 20,
           columns: 64,
         }),
@@ -198,7 +231,6 @@ export const register: Register = on => {
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
-      toast: text => $.ui.toast(text),
     }
 
     await $.command.register({
@@ -239,6 +271,7 @@ export const register: Register = on => {
     const { peer, text, address } = Thread.inboundOf(e.text)
     const known = Thread.withAlias(thread, address, peer)
 
+    holdPlace(peer)
     await commit(Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isOpen))
 
     return next(e)
@@ -249,6 +282,7 @@ export const register: Register = on => {
     const isSent = refusalOf(result) === undefined && e.message !== replying
 
     if (isSent && e.tool === 'SendMessage' && typeof e.to === 'string' && typeof e.message === 'string') {
+      holdPlace(Thread.peerOf(thread, e.to))
       await commit(
         Thread.record(thread, {
           dir: 'out',
@@ -275,6 +309,11 @@ export const register: Register = on => {
 
     await host.open()
     isOpen = true
+
+    // Focus is granted over an empty composer only, and while this command
+    // runs the composer still holds `/crosstalk`: ask again once it cleared.
+    // Seen live: without this second open, the pane never takes the keys.
+    host.after(FOCUS_RETRY_MS, () => void host?.open().catch(() => undefined))
 
     if (thread.selected !== undefined) {
       thread = Thread.select(thread, thread.selected)
@@ -304,28 +343,48 @@ export const register: Register = on => {
     return result
   })
 
+  // The wheel and the scroll keys move the thread, not the pane: the
+  // header, the tabs and the reply field stay put.
+  on('ui.scroll', { requestId: PANE_ID }, ($, e, next) => {
+    if (e.origin.kind !== 'person') {
+      return next(e)
+    }
+
+    scrollBack(-Math.sign(e.by) * Math.max(1, Math.round(Math.abs(e.by) / 3)))
+
+    return {}
+  })
+
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE_ID || (e.surface !== 'terminal' && e.surface !== 'desktop')) {
       return next(e)
     }
 
-    const { Box, Text, Select, Input } = await $.ui.resolve(e)
+    const { Box, Text, Button, Input, Markdown } = await $.ui.resolve(e)
 
     return paneView(
       {
-        ui: { Box, Text, Select, Input },
+        ui: { Box, Text, Button, Input, Markdown },
+        // A column for the left margin, three for the pane's close mark.
+        columns: Math.max(16, e.props.bodyColumns - 4),
         rows: e.props.scroll.bodyRows,
+        isFocused: e.props.isFocused,
+        back,
+        draft,
         onSelect: peer => {
           thread = Thread.select(thread, peer)
+          back = 0
           redraw()
         },
-        draft,
+        onBack: by => scrollBack(by),
         onInput: text => {
           draft = text
           host?.invalidate()
         },
+        notice,
         onSubmit: text => {
           draft = ''
+          notice = undefined
           void send(text)
         },
       },
