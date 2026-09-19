@@ -16,7 +16,7 @@ jobs:
     name: format, lint, typecheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - name: oxfmt --check
         run: make fmt-check
@@ -29,7 +29,7 @@ jobs:
     name: validate + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # The build the pinned declarations were written by (first line of
       # types/claude-code.d.ts): the mod is tested against the engine its

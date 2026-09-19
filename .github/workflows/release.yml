@@ -13,7 +13,7 @@ jobs:
     name: github release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # An installed copy updates to what plugin.json says: a tag that
       # disagrees with it would publish one version and ship another.
