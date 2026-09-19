@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Entry } from '../hooks/thread'
+import * as Thread from '../hooks/thread'
 import * as View from '../hooks/view'
-import { AT } from './fixtures'
+import { AT, textOf } from './fixtures'
 
 const at = (hhmm: string, day = '19') => AT(`2026-09-${day}T${hhmm}:00.000`)
 
@@ -99,5 +100,145 @@ describe('view', () => {
 
   test('the day label reads as a short date', async () => {
     expect(View.dayOf(at('12:00'))).toBe('sat 19 sep')
+  })
+})
+
+/**
+ * Element constructors that build the tree as plain data, so a view renders
+ * without an engine: `{ type, props, children }`, a Button's closures kept.
+ */
+const FAKE_UI = Object.fromEntries(
+  ['Box', 'Text', 'Button', 'Input', 'Markdown'].map(type => [
+    type,
+    (props: Record<string, unknown>) => ({ type, props, children: props.children }),
+  ]),
+) as unknown as View.Kit['ui']
+
+type Node = { type?: string; props?: Record<string, unknown>; children?: unknown }
+
+function buttonsOf(tree: unknown): Node[] {
+  if (Array.isArray(tree)) return tree.flatMap(buttonsOf)
+  if (typeof tree !== 'object' || tree === null) return []
+
+  const node = tree as Node
+
+  return [...(node.type === 'Button' ? [node] : []), ...buttonsOf(node.children)]
+}
+
+function kitOf(overrides: Partial<View.Kit> = {}) {
+  const calls: string[] = []
+  const kit: View.Kit = {
+    ui: FAKE_UI,
+    columns: 60,
+    rows: 30,
+    isFocused: true,
+    back: 0,
+    draft: '',
+    view: 'inbox',
+    mode: 'insert',
+    home: 'open:api',
+    onOpen: peer => calls.push(`open ${peer}`),
+    onInbox: () => calls.push('inbox'),
+    onBack: by => calls.push(`back ${by}`),
+    onInput: () => undefined,
+    onSubmit: () => undefined,
+    onMove: delta => calls.push(`move ${delta}`),
+    onOpenHere: () => calls.push('open here'),
+    onTop: () => calls.push('top'),
+    onInsert: () => calls.push('insert'),
+    onClose: () => calls.push('close'),
+    ...overrides,
+  }
+
+  return { kit, calls }
+}
+
+const THREAD = Thread.record(
+  Thread.record(Thread.record(Thread.EMPTY, { dir: 'in', peer: 'web', text: 'deployed', at: 2 }), {
+    dir: 'in',
+    peer: 'api',
+    text: 'ready?',
+    at: 3,
+  }),
+  { dir: 'out', peer: 'api', text: 'yes', at: 4 },
+)
+
+const press = (tree: unknown, hotkey: string) => {
+  const button = buttonsOf(tree).find(b => b.props?.hotkey === hotkey)
+  const onPress = button?.props?.onPress
+
+  if (typeof onPress !== 'function') throw new Error(`no ${hotkey} key`)
+
+  onPress()
+}
+
+describe('vim keys', () => {
+  test('the inbox binds j k l g q to move, open, go to the top and close', async () => {
+    const { kit, calls } = kitOf()
+    const tree = View.paneView(kit, THREAD)
+
+    expect(buttonsOf(tree).flatMap(b => (b.props?.hotkey ? [b.props.hotkey] : []))).toEqual([
+      'j',
+      'k',
+      'l',
+      'g',
+      'q',
+    ])
+
+    press(tree, 'j')
+    press(tree, 'k')
+    press(tree, 'l')
+    press(tree, 'g')
+    press(tree, 'q')
+
+    expect(calls).toEqual(['move 1', 'move -1', 'open here', 'top', 'close'])
+  })
+
+  test('the ring starts on home: a row, the reply field, or ‹ in normal mode', async () => {
+    const focusedOf = (tree: unknown) =>
+      buttonsOf(tree).find(b => b.props?.autoFocus)?.props?.key ?? 'none'
+
+    expect(focusedOf(View.paneView(kitOf({ home: 'open:web' }).kit, THREAD))).toBe('open:web')
+    expect(
+      focusedOf(View.paneView(kitOf({ view: 'thread', mode: 'normal', home: 'back' }).kit, { ...THREAD, selected: 'api' })),
+    ).toBe('back')
+  })
+
+  test('a conversation in insert mode binds no letter: they are typed', async () => {
+    const { kit } = kitOf({ view: 'thread', mode: 'insert' })
+    const tree = View.paneView(kit, { ...THREAD, selected: 'api' })
+
+    expect(buttonsOf(tree).filter(b => b.props?.hotkey)).toEqual([])
+    expect(textOf(tree)).toContain('esc normal')
+  })
+
+  test('normal mode binds j k d u g i h q to scroll, reply, go back and close', async () => {
+    const { kit, calls } = kitOf({ view: 'thread', mode: 'normal', home: 'back' })
+    const tree = View.paneView(kit, { ...THREAD, selected: 'api' })
+
+    for (const key of ['j', 'k', 'd', 'u', 'g', 'i', 'h', 'q']) {
+      press(tree, key)
+    }
+
+    expect(calls).toEqual([
+      'back -1',
+      'back 1',
+      'back -1',
+      'back 1',
+      'back -2',
+      'insert',
+      'inbox',
+      'close',
+    ])
+  })
+
+  test('the next row stops at the ends and starts from the top off a row', async () => {
+    const rows = ['open:a', 'open:b', 'open:c']
+
+    expect(View.rowAfter(rows, 'open:b', 1)).toBe('open:c')
+    expect(View.rowAfter(rows, 'open:c', 1)).toBe('open:c')
+    expect(View.rowAfter(rows, 'open:a', -1)).toBe('open:a')
+    expect(View.rowAfter(rows, 'vim:j', 1)).toBe('open:a')
+    expect(View.rowAfter([], undefined, 1)).toBeUndefined()
   })
 })

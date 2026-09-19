@@ -1,7 +1,7 @@
 import type { EngineInterface, Register, Timer, ToolCallArgs, ToolCallResult, UiPane } from 'claude-code'
 
 import * as Thread from './thread'
-import { paneView } from './view'
+import * as View from './view'
 
 export const COMMAND = 'crosstalk'
 export const PANE_ID = 'crosstalk'
@@ -17,6 +17,9 @@ export const FOCUS_RETRY_MS = 150
 export const REFOCUS_MS = 400
 
 const PEER_ORIGINS = { kind: ['peer', 'peer-send-message'] } as const
+
+// An inbox row's key: the prefix, then the peer's name.
+const ROW_PREFIX = 'open:'
 
 // One store key a session: `thread:<session id>`.
 const STORE_PREFIX = 'thread:'
@@ -37,7 +40,7 @@ type Host = {
   status: (text: string | undefined) => void
   open: () => Promise<void>
   close: () => Promise<void>
-  focus: (key: string) => void
+  focus: (key: string) => Promise<boolean>
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
@@ -132,6 +135,35 @@ export const register: Register = on => {
   let notice: string | undefined
   // The inbox, or the conversation opened from it.
   let view: 'inbox' | 'thread' = 'inbox'
+  // In a conversation, vim's modes: typing a reply, or moving with keys.
+  let mode: 'insert' | 'normal' = 'insert'
+  // The key of our element holding the focus ring, as ui.focus last said.
+  let ring: string | undefined
+
+  /**
+   * Where the ring is decides the mode: on the reply field, typing; on any
+   * other element of a conversation, moving.
+   */
+  function onRing(key: string | undefined): void {
+    ring = key
+
+    const now = key === 'reply' ? 'insert' : 'normal'
+
+    if (view === 'thread' && key !== undefined && now !== mode) {
+      mode = now
+      host?.invalidate()
+    }
+  }
+
+  /**
+   * Moves the ring to `key`. Seen live: the engine raises no ui.focus to the
+   * plugin for its own move, so the ring is noted here.
+   */
+  function focus(key: string): void {
+    void host?.focus(key).then(isMoved => {
+      if (isMoved) onRing(key)
+    })
+  }
 
   /**
    * Whether `peer`'s conversation is on screen: its messages arrive read.
@@ -149,14 +181,37 @@ export const register: Register = on => {
     host?.after(REFOCUS_MS, () => {
       void host
         ?.open()
-        .then(() => host?.focus(key))
+        .then(() => focus(key))
         .catch(() => undefined)
     })
+  }
+
+  /**
+   * The inbox rows' keys, top to bottom.
+   */
+  function rowsOf(): string[] {
+    return Thread.conversationsOf(thread).map(c => `${ROW_PREFIX}${c.peer}`)
+  }
+
+  /**
+   * The element the ring starts on when the pane takes the keyboard: the
+   * inbox row last opened, the reply field, or ‹ in normal mode.
+   */
+  function homeOf(): string {
+    if (view === 'thread') {
+      return mode === 'insert' ? 'reply' : 'back'
+    }
+
+    const peers = Thread.conversationsOf(thread).map(c => c.peer)
+    const peer = peers.includes(thread.selected ?? '') ? thread.selected : peers[0]
+
+    return `open:${peer ?? ''}`
   }
 
   function openThread(peer: string): void {
     thread = Thread.select(thread, peer)
     view = 'thread'
+    mode = 'insert'
     back = 0
     notice = undefined
     redraw()
@@ -274,7 +329,11 @@ export const register: Register = on => {
           columns: 64,
         }),
       close: () => $.ui.close({ id: PANE_ID }),
-      focus: key => void $.ui.focus({ requestId: PANE_ID, key }).catch(() => undefined),
+      focus: key =>
+        $.ui.focus({ requestId: PANE_ID, key }).then(
+          result => result.deny === undefined,
+          () => false,
+        ),
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
@@ -376,9 +435,18 @@ export const register: Register = on => {
   })
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
-    // The person's esc in a conversation goes back to the inbox, as a
-    // messaging app's back does; /crosstalk (the plugin's close) still closes.
+    // The person's esc in a conversation leaves the reply field for normal
+    // mode, then goes back to the inbox, as vim and a messaging app would;
+    // /crosstalk and q (the plugin's close) still close.
     if (e.origin.kind === 'person' && view === 'thread') {
+      if (mode === 'insert') {
+        mode = 'normal'
+        host?.invalidate()
+        refocus('back')
+
+        return { deny: 'normal mode' }
+      }
+
       openInbox()
 
       return { deny: 'back to the inbox' }
@@ -391,6 +459,17 @@ export const register: Register = on => {
       refresh?.cancel()
       refresh = undefined
       redraw()
+    }
+
+    return result
+  })
+
+  // The person's moves (Tab, arrows, a click) and the engine's (autoFocus).
+  on('ui.focus', async ($, e, next) => {
+    const result = await next(e)
+
+    if (e.requestId === PANE_ID && result.deny === undefined) {
+      onRing(e.element)
     }
 
     return result
@@ -416,7 +495,7 @@ export const register: Register = on => {
 
     const { Box, Text, Button, Input, Markdown } = await $.ui.resolve(e)
 
-    return paneView(
+    return View.paneView(
       {
         ui: { Box, Text, Button, Input, Markdown },
         // A column for the left margin, three for the pane's close mark.
@@ -426,8 +505,31 @@ export const register: Register = on => {
         back,
         draft: drafts.get(thread.selected ?? '') ?? '',
         view,
+        mode,
         onOpen: peer => openThread(peer),
         onInbox: () => openInbox(),
+        home: homeOf(),
+        onMove: delta => {
+          const row = View.rowAfter(rowsOf(), ring, delta)
+
+          if (row !== undefined) focus(row)
+        },
+        onOpenHere: () => {
+          const row = View.rowAfter(rowsOf(), ring, 0)
+
+          if (row !== undefined) openThread(row.slice(ROW_PREFIX.length))
+        },
+        onTop: () => {
+          const row = rowsOf()[0]
+
+          if (row !== undefined) focus(row)
+        },
+        onInsert: () => {
+          mode = 'insert'
+          host?.invalidate()
+          focus('reply')
+        },
+        onClose: () => void host?.close().catch(() => undefined),
         onBack: by => scrollBack(by),
         onInput: text => {
           drafts.set(thread.selected ?? '', text)

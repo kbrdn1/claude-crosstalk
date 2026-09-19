@@ -17,7 +17,7 @@ other Claude Code sessions, and a field to answer them yourself.
 │ ● crimson-desert-start
 │   no message yet
 │ ─────────────────────────────────────────────────────────────
-│ ↑↓ choose · ⏎ open · esc close
+│ j: ↓  k: ↑  l: open  g: top  q: close
 ```
 
 ```
@@ -35,7 +35,7 @@ other Claude Code sessions, and a field to answer them yourself.
 │                                               via le socket ┃
 │ ─────────────────────────────────────────────────────────────
 │ ❯ message claude-98…
-│ ⏎ send · ‹ or esc inbox
+│ ⏎ send · esc normal mode
 ```
 
 > ⚠️ **Early access.** Mods run on Claude Code's function hooks, which are
@@ -64,13 +64,25 @@ sessions on one machine talk. crosstalk adds the part you see:
 - **Unread**: while the pane is closed, the status line counts the messages
   nobody looked at.
 
-Keys: `/crosstalk` opens the pane with the keyboard. In the inbox, `↑`/`↓`
-choose and `⏎` opens; in a conversation, `⏎` sends, the wheel or
-`PageUp`/`PageDown` scroll the thread (the header and the reply field stay)
-and `‹` or `esc` go back to the inbox; `esc` in the inbox closes, and
-`ctrl+x tab` goes back and forth with the prompt. Each conversation keeps
-its own draft. The pane docks beside the transcript in the fullscreen layout
-from 110 columns (`ctrl+x ←/→` resizes it), inline above the prompt
+Keys, vim-style, drawn at the bottom of the pane as they apply:
+
+| | Inbox | Conversation, normal mode | Conversation, insert mode |
+|---|---|---|---|
+| `j` / `k` | next / previous row | scroll a message down / up | typed |
+| `d` / `u` | — | half a page down / up | typed |
+| `g` | top row | back to the latest | typed |
+| `l`, `⏎` | open the conversation | — | `⏎` sends |
+| `i` | — | reply (insert mode) | typed |
+| `h` | — | back to the inbox | typed |
+| `esc` | close the pane | back to the inbox | normal mode |
+| `q` | close the pane | close the pane | typed |
+
+A conversation opens in insert mode. Arrows, `⏎`, the wheel and
+`PageUp`/`PageDown` work as well, and `ctrl+x tab` goes back and forth with
+the prompt. Hotkeys are one lowercase letter or digit: shift is ignored (no
+`G` apart from `g`), and there is no `ctrl` or count. Each conversation
+keeps its own draft. The pane docks beside the transcript in the fullscreen
+layout from 110 columns (`ctrl+x ←/→` resizes it), inline above the prompt
 otherwise.
 
 A message held for approval (the two sessions run in different permission
