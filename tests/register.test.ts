@@ -16,6 +16,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   const sent: ToolCallInput[] = []
   const opened: string[] = []
   const statuses: (string | undefined)[] = []
+  const toasts: string[] = []
   const runs: (readonly string[])[] = []
   const store = new Map(Object.entries(stored))
 
@@ -49,7 +50,15 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   on('tool.call', { tool: 'SendMessage' }, ($, e) => {
     sent.push(e)
 
-    return { result: { success: true } }
+    // What SendMessage answers for a recipient no session answers to.
+    return Reflect.get(e, 'to') === 'gone'
+      ? { result: { success: false, message: 'No agent named gone', display: 'Not sent — no agent named gone is reachable.' } }
+      : { result: { success: true } }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', ($, e) => {
@@ -64,7 +73,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
     return { value: undefined }
   })
 
-  return { sent, opened, statuses, runs, store, clock }
+  return { sent, opened, statuses, toasts, runs, store, clock }
 }
 
 describe('register', () => {
@@ -221,6 +230,44 @@ describe('register', () => {
       { value: 'web', label: 'web  busy' },
     ])
     expect(textOf(await ui.drawn())).toContain('yes')
+  })
+
+  test('a SendMessage no session answered is no message sent', async ($, on) => {
+    const w = world(on)
+
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'SendMessage', to: 'gone', message: 'lost' })
+    await $.session.receive(fromPeer('gone', 'still here?'))
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    expect(textOf(await ui.drawn())).not.toContain('lost')
+
+    await ui.input({ key: 'reply', text: 'you there?', kind: 'submit' })
+    await w.clock.settle()
+    await ui.redraw()
+
+    expect(textOf(await ui.drawn()), 'a refused reply is not drawn as sent').not.toContain('you there?')
+    expect(w.toasts).toEqual(['crosstalk · not sent: Not sent — no agent named gone is reachable.'])
+  })
+
+  test("a reply to a peer no longer listed goes to its socket", async ($, on) => {
+    const w = world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive({
+      origin: { kind: 'peer' },
+      text: '<cross-session-message from="uds:/tmp/cc-socks/9.sock" from-name="claude-98">hi</cross-session-message>',
+    })
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    await ui.input({ key: 'reply', text: 'hello', kind: 'submit' })
+    await w.clock.settle()
+
+    expect(w.sent.map(e => Reflect.get(e, 'to'))).toEqual(['uds:/tmp/cc-socks/9.sock'])
   })
 
   test('the store keeps the 50 most recent sessions', async ($, on) => {

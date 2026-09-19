@@ -32,6 +32,29 @@ type Host = {
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
+  toast: (text: string) => void
+}
+
+/**
+ * Why a SendMessage call did not reach anyone, or undefined when it did. A
+ * recipient no session answers to is `{ success: false }`, not an error.
+ */
+function refusalOf(result: ToolCallResult): string | undefined {
+  const record: unknown = result.result
+  const field = (key: string) =>
+    typeof record === 'object' && record !== null ? Reflect.get(record, key) : undefined
+
+  if (result.deny !== undefined) {
+    return result.deny
+  }
+
+  if (result.isError === true || field('success') === false) {
+    const reason = field('display') ?? field('message') ?? result.text
+
+    return typeof reason === 'string' ? reason : 'refused'
+  }
+
+  return undefined
 }
 
 /**
@@ -137,21 +160,20 @@ export const register: Register = on => {
     replying = message
 
     const result = await host
-      .call({ tool: 'SendMessage', to, message, summary: 'crosstalk reply' })
+      .call({ tool: 'SendMessage', to: Thread.addressOf(thread, to), message, summary: 'crosstalk reply' })
       .catch((error: unknown) => ({ deny: String(error), isError: undefined }))
       .finally(() => {
         replying = undefined
       })
+    const refusal = refusalOf(result)
 
-    if (result.deny !== undefined) {
-      host.status(`crosstalk · not sent: ${result.deny}`)
+    if (refusal !== undefined) {
+      host.toast(`crosstalk · not sent: ${refusal}`)
 
       return
     }
 
-    if (result.isError !== true) {
-      await commit(Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }))
-    }
+    await commit(Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }))
   }
 
   on('session.start', async ($, e, next) => {
@@ -176,6 +198,7 @@ export const register: Register = on => {
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
+      toast: text => $.ui.toast(text),
     }
 
     await $.command.register({
@@ -223,7 +246,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => {
     const result = await next(e)
-    const isSent = result.deny === undefined && result.isError !== true && e.message !== replying
+    const isSent = refusalOf(result) === undefined && e.message !== replying
 
     if (isSent && e.tool === 'SendMessage' && typeof e.to === 'string' && typeof e.message === 'string') {
       await commit(

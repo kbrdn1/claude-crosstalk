@@ -84,6 +84,29 @@ describe('thread', () => {
     expect(Thread.peerOf(thread, 'web [ab12cd]')).toBe('web')
   })
 
+  test('a peer renamed at the same address takes its conversation along', async () => {
+    let thread = Thread.withAlias(Thread.EMPTY, 'uds:/1.sock', 'claude-98')
+
+    thread = Thread.record(thread, { dir: 'in', peer: 'claude-98', text: 'hi', at: 1 })
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'claude-crosstalk')
+
+    expect(thread.entries.map(e => e.peer)).toEqual(['claude-crosstalk'])
+    expect(thread.unread).toEqual({ 'claude-crosstalk': 1 })
+    expect(thread.selected).toBe('claude-crosstalk')
+    expect(Thread.peerOf(thread, 'uds:/1.sock')).toBe('claude-crosstalk')
+  })
+
+  test('a reply goes to the listed name, else to the address the peer wrote from', async () => {
+    const known = Thread.withAlias(Thread.EMPTY, 'uds:/1.sock', 'claude-98')
+
+    expect(Thread.addressOf(known, 'claude-98'), 'not listed: its socket').toBe('uds:/1.sock')
+    expect(
+      Thread.addressOf(Thread.withListing(known, Thread.listingOf(LISTING)), 'api'),
+      'listed: its name',
+    ).toBe('api')
+    expect(Thread.addressOf(Thread.EMPTY, 'web'), 'nothing known: its name').toBe('web')
+  })
+
   test('a saved thread comes back as it was; anything else is none', async () => {
     const thread = Thread.fromJournal(JOURNAL)
     const saved = JSON.parse(JSON.stringify(Thread.toSaved(thread, 42)))

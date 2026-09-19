@@ -124,12 +124,46 @@ export function peerOf(thread: Thread, to: string): string {
 }
 
 /**
- * The thread knowing that `address` is `peer`.
+ * The thread knowing that `address` is `peer`. A session renamed since it
+ * last wrote from that address takes its conversation along.
  */
 export function withAlias(thread: Thread, address: string | undefined, peer: string): Thread {
-  return address === undefined || address === peer || thread.aliases[address] === peer
-    ? thread
-    : { ...thread, aliases: { ...thread.aliases, [address]: peer } }
+  const before = address === undefined ? undefined : thread.aliases[address]
+
+  if (address === undefined || address === peer || before === peer) {
+    return thread
+  }
+
+  const known = { ...thread, aliases: { ...thread.aliases, [address]: peer } }
+
+  return before === undefined ? known : renamed(known, before, peer)
+}
+
+function renamed(thread: Thread, from: string, to: string): Thread {
+  const { [from]: count = 0, ...unread } = thread.unread
+
+  return {
+    ...thread,
+    entries: thread.entries.map(entry => (entry.peer === from ? { ...entry, peer: to } : entry)),
+    unread: count > 0 ? { ...unread, [to]: (unread[to] ?? 0) + count } : unread,
+    selected: thread.selected === from ? to : thread.selected,
+    aliases: Object.fromEntries(
+      Object.entries(thread.aliases).map(([address, name]) => [address, name === from ? to : name]),
+    ),
+  }
+}
+
+/**
+ * Where a reply to `peer` goes: its name while ListAgents lists it, else the
+ * socket it last wrote from (it outlives a rename, not a restart), else the
+ * name as it is.
+ */
+export function addressOf(thread: Thread, peer: string): string {
+  if (thread.peers.some(listed => listed.name === peer)) {
+    return peer
+  }
+
+  return Object.entries(thread.aliases).findLast(([, name]) => name === peer)?.[0] ?? peer
 }
 
 /**
