@@ -1,4 +1,11 @@
-import type { EngineInterface, Register, Timer, ToolCallArgs, ToolCallResult, UiPane } from 'claude-code'
+import type {
+  EngineInterface,
+  Register,
+  Timer,
+  ToolCallArgs,
+  ToolCallResult,
+  UiPane,
+} from 'claude-code'
 
 import * as Thread from './thread'
 import * as View from './view'
@@ -270,7 +277,8 @@ export const register: Register = on => {
   async function refreshPeers(): Promise<void> {
     const result = await host?.call({ tool: 'ListAgents' }).catch(() => undefined)
     const record: unknown = result?.result
-    const listing = typeof record === 'object' && record ? Reflect.get(record, 'listing') : undefined
+    const listing =
+      typeof record === 'object' && record ? Reflect.get(record, 'listing') : undefined
 
     if (typeof listing === 'string') {
       thread = Thread.withListing(thread, Thread.listingOf(listing))
@@ -289,7 +297,12 @@ export const register: Register = on => {
     replying = message
 
     const result = await host
-      .call({ tool: 'SendMessage', to: Thread.addressOf(thread, to), message, summary: 'crosstalk reply' })
+      .call({
+        tool: 'SendMessage',
+        to: Thread.addressOf(thread, to),
+        message,
+        summary: 'crosstalk reply',
+      })
       .catch((error: unknown) => ({ deny: String(error), isError: undefined }))
       .finally(() => {
         replying = undefined
@@ -305,7 +318,9 @@ export const register: Register = on => {
     }
 
     back = 0
-    await commit(Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }))
+    await commit(
+      Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }),
+    )
   }
 
   on('session.start', async ($, e, next) => {
@@ -378,7 +393,9 @@ export const register: Register = on => {
     const known = Thread.withAlias(thread, address, peer)
 
     holdPlace(peer)
-    await commit(Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isReading(peer)))
+    await commit(
+      Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isReading(peer)),
+    )
 
     return next(e)
   })
@@ -387,7 +404,12 @@ export const register: Register = on => {
     const result = await next(e)
     const isSent = refusalOf(result) === undefined && e.message !== replying
 
-    if (isSent && e.tool === 'SendMessage' && typeof e.to === 'string' && typeof e.message === 'string') {
+    if (
+      isSent &&
+      e.tool === 'SendMessage' &&
+      typeof e.to === 'string' &&
+      typeof e.message === 'string'
+    ) {
       holdPlace(Thread.peerOf(thread, e.to))
       await commit(
         Thread.record(thread, {
