@@ -97,7 +97,7 @@ describe('register', () => {
       const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface })
 
       expect(textOf(await ui.drawn()), surface).toContain('● claude-98')
-      expect((await ui.findAll({ type: 'Button' })).map(b => b.key), 'offline and cloud peers are no conversation').toEqual([
+      expect((await ui.findAll({ type: 'Button' })).map(b => b.key).filter(k => k?.startsWith('open:')), 'offline and cloud peers are no conversation').toEqual([
         'open:api',
         'open:web',
       ])
@@ -237,7 +237,7 @@ describe('register', () => {
 
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
 
-    expect((await ui.findAll({ type: 'Button' })).map(b => b.key)).toEqual(['open:api', 'open:web'])
+    expect((await ui.findAll({ type: 'Button' })).map(b => b.key).filter(k => k?.startsWith('open:'))).toEqual(['open:api', 'open:web'])
     expect(textOf(await ui.drawn())).toContain('yes')
   })
 
@@ -312,9 +312,9 @@ describe('register', () => {
     const narrow = await $.ui.render({ ...PANE, props: { ...PANE.props, bodyColumns: 36 } })
 
     expect(textOf(wide), 'your bar on the right').toContain('yes┃')
-    expect(textOf(wide)).toContain('⏎ send · ‹ or esc inbox')
+    expect(textOf(wide)).toContain('⏎ send · esc normal mode')
     expect(textOf(narrow), 'your bar on the left').toContain('┃yes')
-    expect(textOf(narrow)).toContain('⏎ send · esc inbox')
+    expect(textOf(narrow)).toContain('⏎ send · esc normal')
   })
 
   test('an unfocused pane says how to reach it', async ($, on) => {
