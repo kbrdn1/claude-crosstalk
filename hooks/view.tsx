@@ -130,7 +130,7 @@ export function paneView(kit: Kit, thread: Thread.Thread): RenderElement {
                   <Text bold color={entry.dir === 'in' ? COLORS.peer : COLORS.accent}>
                     {entry.dir === 'in' ? `← ${entry.peer}` : '→ you'}
                   </Text>
-                  <Text dimColor>{`  ${clockOf(entry.at)}`}</Text>
+                  <Text dimColor>{entry.at === undefined ? '' : `  ${clockOf(entry.at)}`}</Text>
                 </Text>
                 <Text wrap="wrap">{entry.text}</Text>
               </Box>
