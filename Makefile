@@ -71,7 +71,7 @@ validate: ## Read the plugin the way the engine will (manifest, hooks, calls)
 test: ## Run the mod's tests (claude plugin test)
 	$(WITH_MODS) $(CLAUDE) plugin test .
 
-ci: typecheck validate test ## Run local CI checks
+ci: fmt-check lint typecheck validate test ## Run local CI checks
 	@printf "${GREEN}${BOLD}Local CI checks completed.${NC}\n"
 
 # =============================================================================
