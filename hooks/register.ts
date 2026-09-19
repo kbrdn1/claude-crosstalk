@@ -124,8 +124,8 @@ export const register: Register = on => {
   // The reply the pane is sending: recorded by send() itself, since the
   // engine may or may not run this plugin's tool.call hook for its own call.
   let replying: string | undefined
-  // What the person has typed in the reply field so far.
-  let draft = ''
+  // What the person has typed in each conversation's reply field so far.
+  const drafts = new Map<string, string>()
   // How many messages the thread is scrolled back from its newest one.
   let back = 0
   // Why the last reply did not go, shown in the pane until the next one.
@@ -424,18 +424,18 @@ export const register: Register = on => {
         rows: e.props.scroll.bodyRows,
         isFocused: e.props.isFocused,
         back,
-        draft,
+        draft: drafts.get(thread.selected ?? '') ?? '',
         view,
         onOpen: peer => openThread(peer),
         onInbox: () => openInbox(),
         onBack: by => scrollBack(by),
         onInput: text => {
-          draft = text
+          drafts.set(thread.selected ?? '', text)
           host?.invalidate()
         },
         notice,
         onSubmit: text => {
-          draft = ''
+          drafts.delete(thread.selected ?? '')
           notice = undefined
           void send(text)
         },

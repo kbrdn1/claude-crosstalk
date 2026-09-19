@@ -447,6 +447,34 @@ describe('register', () => {
     expect(drawn).toContain('still there?')
   })
 
+  test("a draft stays with its conversation", async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.session.receive(fromPeer('web', 'deployed'))
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
+    await ui.input({ key: 'reply', text: 'half a thought', kind: 'change' })
+    await ui.press({ key: 'back' })
+    await ui.redraw()
+    await ui.press({ key: 'open:web' })
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'reply' }))?.props.value).toBe('')
+
+    await ui.press({ key: 'back' })
+    await ui.redraw()
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'reply' }))?.props.value).toBe('half a thought')
+  })
+
   test('/crosstalk opens on the inbox again', async ($, on) => {
     world(on)
     on('ui.close', () => ({ value: undefined }))
