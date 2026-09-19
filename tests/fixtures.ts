@@ -84,3 +84,62 @@ export function textOf(tree: unknown): string {
 
   return `${typeof label === 'string' ? label : ''}${textOf(Reflect.get(tree, 'children') ?? [])}`
 }
+
+const API = 'uds:/tmp/cc-socks/1.sock'
+const WEB = 'uds:/tmp/cc-socks/2.sock'
+
+/**
+ * A session journal as Claude Code writes it, one JSON row a line: a queued
+ * framing (no origin), a peer message delivered while idle (a `user` row),
+ * the model answering at the peer's socket address, a peer message
+ * delivered mid-turn (a `queued_command` attachment) and again under the
+ * same `msg_id`, and a line that is not JSON.
+ */
+export const JOURNAL: string[] = [
+  {
+    type: 'queue-operation',
+    timestamp: '2026-09-19T10:00:00.000Z',
+    content: `<cross-session-message from="${API}" from-name="api">ready?</cross-session-message>`,
+  },
+  {
+    type: 'user',
+    timestamp: '2026-09-19T10:00:01.000Z',
+    isMeta: true,
+    origin: { kind: 'peer', from: API, name: 'api', msg_id: 'm1', body: 'ready?' },
+    message: {
+      role: 'user',
+      content: `Another Claude session sent a message:\n<cross-session-message from="${API}" from-name="api">\nready?\n</cross-session-message>`,
+    },
+  },
+  {
+    type: 'assistant',
+    timestamp: '2026-09-19T10:00:05.000Z',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'On it.' },
+        { type: 'tool_use', id: 't1', name: 'SendMessage', input: { to: API, message: 'yes, go' } },
+      ],
+    },
+  },
+  {
+    type: 'attachment',
+    timestamp: '2026-09-19T10:01:00.000Z',
+    attachment: {
+      type: 'queued_command',
+      prompt: `<cross-session-message from="${WEB}" from-name="web">deployed</cross-session-message>`,
+      origin: { kind: 'peer', from: WEB, name: 'web', msg_id: 'm2', body: 'deployed' },
+    },
+  },
+  {
+    type: 'attachment',
+    timestamp: '2026-09-19T10:01:02.000Z',
+    attachment: {
+      type: 'queued_command',
+      origin: { kind: 'peer', from: WEB, name: 'web', msg_id: 'm2', body: 'deployed' },
+    },
+  },
+  'not json {',
+].map(row => (typeof row === 'string' ? row : JSON.stringify(row)))
+
+export const AT = (iso: string) => Date.parse(iso)

@@ -1,27 +1,64 @@
 import type { On, ToolCallInput } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { CROSSTALK, fromPeer, LISTING, PANE, SESSION, textOf } from './fixtures'
+import * as Thread from '../hooks/thread'
+import { CROSSTALK, fromPeer, JOURNAL, LISTING, PANE, SESSION, textOf } from './fixtures'
+
+const JOURNAL_FILE = '/home/me/.claude/projects/-work/s1.jsonl'
 
 /**
- * The world beneath crosstalk: a clock, ListAgents answering LISTING,
- * SendMessage answering sent and remembering every call, panes opening.
+ * The world beneath crosstalk: a clock, session s1 in HOME /home/me whose
+ * journal holds `journal`, a store holding `stored`, ListAgents answering
+ * LISTING, SendMessage answering sent and remembering every call, panes
+ * opening.
  */
-function world(on: On) {
+function world(on: On, journal: string[] = [], stored: Record<string, unknown> = {}) {
   const sent: ToolCallInput[] = []
   const opened: string[] = []
   const statuses: (string | undefined)[] = []
+  const toasts: string[] = []
+  const runs: (readonly string[])[] = []
+  const store = new Map(Object.entries(stored))
 
   const clock = mock.clock(on)
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.receive', ($, e) => ({ text: e.text }))
+  on('session.id', () => ({ value: 's1' }))
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('process.run', ($, e) => {
+    runs.push(e.argv)
+
+    const stdout = e.argv[0] === 'find' ? `${JOURNAL_FILE}\n` : journal.join('\n')
+
+    return { value: { exitCode: 0, stdout, stderr: '' } }
+  })
+  on('store.get', ($, e) => ({ value: store.get(e.key) }))
+  on('store.set', ($, e) => {
+    store.set(e.key, JSON.parse(JSON.stringify(e.value)))
+
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }))
+  on('store.delete', ($, e) => {
+    store.delete(e.key)
+
+    return { value: undefined }
+  })
 
   on('tool.call', { tool: 'ListAgents' }, () => ({ result: { listing: LISTING } }))
   on('tool.call', { tool: 'SendMessage' }, ($, e) => {
     sent.push(e)
 
-    return { result: { success: true } }
+    // What SendMessage answers for a recipient no session answers to.
+    return Reflect.get(e, 'to') === 'gone'
+      ? { result: { success: false, message: 'No agent named gone', display: 'Not sent — no agent named gone is reachable.' } }
+      : { result: { success: true } }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', ($, e) => {
@@ -36,7 +73,7 @@ function world(on: On) {
     return { value: undefined }
   })
 
-  return { sent, opened, statuses, clock }
+  return { sent, opened, statuses, toasts, runs, store, clock }
 }
 
 describe('register', () => {
@@ -126,6 +163,125 @@ describe('register', () => {
     const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
 
     expect(textOf(await ui.drawn())).toContain('you are claude-98')
+  })
+
+  test("a session's first start rebuilds what its journal holds, unread none", async ($, on) => {
+    const w = world(on, JOURNAL)
+
+    await $.session.start(SESSION)
+    expect(w.runs).toEqual([
+      ['find', '/home/me/.claude/projects', '-maxdepth', '2', '-name', 's1.jsonl'],
+      ['grep', '-E', Thread.JOURNAL_PATTERN, JOURNAL_FILE],
+    ])
+    expect(w.statuses.filter(Boolean), 'history is no unread').toEqual([])
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    expect(textOf(await ui.drawn())).toContain('deployed')
+    await ui.select({ key: 'peer', value: 'api' })
+    await ui.redraw()
+
+    const api = textOf(await ui.drawn())
+
+    expect(api).toContain('ready?')
+    expect(api, "the model's answer at api's socket files under api").toContain('yes, go')
+  })
+
+  test('a saved thread wins over the journal, pane replies included', async ($, on) => {
+    const saved = Thread.toSaved(
+      Thread.record(Thread.EMPTY, { dir: 'out', peer: 'api', text: 'typed in the pane', at: 1 }),
+      1,
+    )
+    const w = world(on, JOURNAL, { 'thread:s1': saved })
+
+    await $.session.start(SESSION)
+    expect(w.runs, 'the journal is read on a first start only').toEqual([])
+    await $.command.run(CROSSTALK)
+
+    expect(textOf(await $.ui.render(PANE))).toContain('typed in the pane')
+  })
+
+  test('every message is saved for the next start', async ($, on) => {
+    const w = world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ping'))
+    await $.tool.call({ tool: 'SendMessage', to: 'api', message: 'pong' })
+
+    expect(Thread.fromSaved(w.store.get('thread:s1'))?.entries.map(e => e.text)).toEqual(['ping', 'pong'])
+  })
+
+  test("a model's answer at a peer's socket joins its named conversation", async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive({
+      origin: { kind: 'peer' },
+      text: '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="api">ready?</cross-session-message>',
+    })
+    await $.tool.call({ tool: 'SendMessage', to: 'uds:/tmp/cc-socks/1.sock', message: 'yes' })
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    expect((await ui.find({ key: 'peer' }))?.props.options).toEqual([
+      { value: 'api', label: 'api  idle' },
+      { value: 'web', label: 'web  busy' },
+    ])
+    expect(textOf(await ui.drawn())).toContain('yes')
+  })
+
+  test('a SendMessage no session answered is no message sent', async ($, on) => {
+    const w = world(on)
+
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'SendMessage', to: 'gone', message: 'lost' })
+    await $.session.receive(fromPeer('gone', 'still here?'))
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    expect(textOf(await ui.drawn())).not.toContain('lost')
+
+    await ui.input({ key: 'reply', text: 'you there?', kind: 'submit' })
+    await w.clock.settle()
+    await ui.redraw()
+
+    expect(textOf(await ui.drawn()), 'a refused reply is not drawn as sent').not.toContain('you there?')
+    expect(w.toasts).toEqual(['crosstalk · not sent: Not sent — no agent named gone is reachable.'])
+  })
+
+  test("a reply to a peer no longer listed goes to its socket", async ($, on) => {
+    const w = world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive({
+      origin: { kind: 'peer' },
+      text: '<cross-session-message from="uds:/tmp/cc-socks/9.sock" from-name="claude-98">hi</cross-session-message>',
+    })
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    await ui.input({ key: 'reply', text: 'hello', kind: 'submit' })
+    await w.clock.settle()
+
+    expect(w.sent.map(e => Reflect.get(e, 'to'))).toEqual(['uds:/tmp/cc-socks/9.sock'])
+  })
+
+  test('the store keeps the 50 most recent sessions', async ($, on) => {
+    const stored = Object.fromEntries(
+      Array.from({ length: 52 }, (_, i) => [`thread:old${i}`, { savedAt: i, entries: [], aliases: {} }]),
+    )
+    const w = world(on, [], { ...stored, unrelated: 1 })
+
+    await $.session.start(SESSION)
+
+    expect(w.store.has('thread:old0')).toBe(false)
+    expect(w.store.has('thread:old1')).toBe(false)
+    expect(w.store.has('thread:old2')).toBe(true)
+    expect(w.store.has('unrelated')).toBe(true)
   })
 
   test('a message arriving while the pane is closed shows as unread', async ($, on) => {
