@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)"  srcset="docs/_assets/banner.png">
     <source media="(prefers-color-scheme: light)" srcset="docs/_assets/banner-light.png">
-    <img alt="crosstalk — read and join what your Claude Code sessions tell each other" src="docs/_assets/banner.png" width="100%">
+    <img alt="crosstalk: read and join what your Claude Code sessions tell each other" src="docs/_assets/banner.png" width="100%">
   </picture>
 </p>
 
@@ -77,11 +77,11 @@ Keys, vim-style, drawn at the bottom of the pane as they apply:
 | | Inbox | Conversation, normal mode | Conversation, insert mode |
 |---|---|---|---|
 | `j` / `k` | next / previous row | scroll a message down / up | typed |
-| `d` / `u` | — | half a page down / up | typed |
+| `d` / `u` | · | half a page down / up | typed |
 | `g` | top row | back to the latest | typed |
-| `l`, `⏎` | open the conversation | — | `⏎` sends |
-| `i` | — | reply (insert mode) | typed |
-| `h` | — | back to the inbox | typed |
+| `l`, `⏎` | open the conversation | · | `⏎` sends |
+| `i` | · | reply (insert mode) | typed |
+| `h` | · | back to the inbox | typed |
 | `esc` | close the pane | back to the inbox | normal mode |
 | `q` | close the pane | close the pane | typed |
 

@@ -1,0 +1,45 @@
+{
+  "eyebrow": "Claude Mod",
+  "version": "v0.1.0",
+  "wordmark": "crosstalk",
+  "tagline": "Read and join what your Claude Code<br>sessions tell each other.",
+  "chips": [
+    "Inbox + chat pane",
+    "Vim motions",
+    "Retroactive history",
+    "Replies via SendMessage",
+    "51 tests"
+  ],
+  "install": "claude plugin marketplace add kbrdn1/claude-crosstalk",
+  "footer": "github.com/kbrdn1/claude-crosstalk · TypeScript · MIT · function hooks (early access)",
+  "motif": "<div style=\"width:520px;background:#141414;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden;box-shadow:0 24px 48px -24px rgba(0,0,0,0.6);font-family:'Krypton',monospace;font-size:16px;line-height:25px;color:#e0e0e0;padding:18px 22px 19px;\"><div style='white-space:pre;padding-bottom:8px;border-bottom:1px solid #3a3a3a;'><span style='color:#8a8a8a'>‹</span> <span style='color:#7ab8ff'>claude-98</span> <span style='color:#6bc97f'>· idle</span>                <span style='color:#d4825d'>✉ 2</span></div><div style='white-space:pre;margin-top:8px;'><span style='color:#7ab8ff'>claude-98</span><span style='color:#5a5a5a'> · 01:28</span></div><div style='white-space:pre;'><span style='color:#7ab8ff'>┃</span> tests are green on #655,</div><div style='white-space:pre;'><span style='color:#7ab8ff'>┃</span> merging into dev?</div><div style='white-space:pre;margin-top:9px;text-align:right;'><span style='color:#d4825d'>you</span><span style='color:#5a5a5a'> · 01:30</span></div><div style='white-space:pre;text-align:right;'>ship it, then rebase #656 <span style='color:#d4825d'>┃</span></div><div style='white-space:pre;margin-top:10px;'><span style='color:#7ab8ff'>claude-98</span><span style='color:#5a5a5a'> · 01:31</span></div><div style='white-space:pre;'><span style='color:#7ab8ff'>┃</span> merged. rebasing now</div><div style='white-space:pre;margin-top:8px;padding-top:8px;border-top:1px solid #3a3a3a;'><span style='color:#d4825d'>❯</span><span style='color:#8a8a8a'> message claude-98…</span></div><div style='white-space:pre;'><span style='color:#d4825d'>j</span><span style='color:#5a5a5a'>: ↓</span>  <span style='color:#d4825d'>k</span><span style='color:#5a5a5a'>: ↑</span>  <span style='color:#d4825d'>i</span><span style='color:#5a5a5a'>: reply</span>  <span style='color:#d4825d'>h</span><span style='color:#5a5a5a'>: inbox</span></div></div>",
+  "facts": [
+    {
+      "icon": "tag",
+      "label": "Version",
+      "value": "v0.1.0",
+      "ok": true
+    },
+    {
+      "icon": "sparkles",
+      "label": "Type",
+      "value": "Claude Code mod"
+    },
+    {
+      "icon": "status",
+      "label": "Requires",
+      "value": "Function hooks"
+    },
+    {
+      "icon": "scale",
+      "label": "License",
+      "value": "MIT"
+    },
+    {
+      "icon": "user",
+      "label": "Author",
+      "value": "kbrdn1",
+      "person": true
+    }
+  ]
+}
