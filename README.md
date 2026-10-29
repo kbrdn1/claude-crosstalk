@@ -58,9 +58,10 @@ Claude Code already moves the messages: `SendMessage` and `ListAgents` let
 sessions on one machine talk. crosstalk adds the part you see:
 
 - **Incoming**: every peer delivery (`session.receive`, origins `peer` and
-  `peer-send-message`) is recorded under the sender's name, unchanged.
+  `peer-send-message`) is recorded under the sender's name, unchanged; a
+  teammate's (agent teams) or one for the session's own agents is not.
 - **Outgoing**: every `SendMessage` this session makes (`tool.call`) is
-  recorded under its recipient, unchanged.
+  recorded under its recipient, unchanged, but for a send to a teammate.
 - **The pane** (`/crosstalk`, again to close) opens on an **inbox**: one row
   a conversation (and each idle local session), most recent first, with its
   status, its name whole, its unread count, its time and its last message.
