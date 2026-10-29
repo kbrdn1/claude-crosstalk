@@ -24,12 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A teammate's message (agent teams) no longer lands in the inbox as an
-  "unknown session".
+  "unknown session", and a send to a teammate no longer opens a
+  conversation; a delivery for one of the session's own agents neither.
+- `/crosstalk` on a pane the engine cannot place says why, in the engine's
+  words, instead of asking for 110 columns.
 - `make types` on Claude Code 2.1.312, which has no `/plugin-types`: it reads
   the declarations the engine now lays beside a mod it loads. The old recipe
   had each run start the next.
-- `live.sh close` (the live-check skill) leaves the pane by `esc` instead of
-  typing `/crosstalk` into a reply field.
+- `live.sh close` and `reload` (the live-check skill) leave the pane by `esc`
+  instead of typing into a reply field.
 
 ### Dependencies
 

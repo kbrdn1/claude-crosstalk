@@ -71,7 +71,8 @@ Where tests go:
     `from-name`, its `from` is a socket address. Session names change (a
     new suffix each start); sockets last as long as the process.
   - A teammate's message (agent teams) is a `peer` delivery too, with a
-    `teammate` and no envelope: this session's own agent, not a peer.
+    `teammate` and no envelope; a send to one answers with a `routing`.
+    This session's own agent, not a peer: neither is recorded.
   - A plugin's own `$.tool.call` runs through its own `tool.call` hooks
     when made inside one of its hooks (the engine logs it `nested`), not
     from a closure (a timer, a press, a submit); its `$.ui.focus` from a
