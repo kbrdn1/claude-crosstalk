@@ -2,9 +2,9 @@
 
 SHELL := /bin/bash
 CLAUDE ?= claude
-TS_VERSION ?= 5.9.3
-OXLINT_VERSION ?= 1.83.0
-OXFMT_VERSION ?= 0.68.0
+TS_VERSION ?= 7.0.2
+OXLINT_VERSION ?= 1.90.0
+OXFMT_VERSION ?= 0.75.0
 # What oxlint and oxfmt read: never types/ (generated) nor the docs.
 SOURCES := hooks tests
 
