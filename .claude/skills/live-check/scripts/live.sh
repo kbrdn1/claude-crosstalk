@@ -2,7 +2,7 @@
 # live.sh — drive a live Claude Code test session with crosstalk loaded, in tmux.
 #
 #   live.sh start [--resume <session-id>]   start the test session (haiku, cheap)
-#   live.sh open | close                     /crosstalk, only when it changes state
+#   live.sh open | close                     /crosstalk to open, esc to close, when it changes state
 #   live.sh keys <tmux key>...               e.g. keys j · keys C-x Tab · keys Escape
 #   live.sh type <text>                      literal text, no Enter
 #   live.sh send <text>                      literal text, then Enter
@@ -29,6 +29,15 @@ screen() { tmux capture-pane -t "$SESSION" -p "$@"; }
 # The docked pane is the column right of the last │ of each row.
 pane() { screen | awk -F'│' 'NF>1 {print "│" $NF}'; }
 is_open() { pane | grep -qE '│ (crosstalk  |‹ )'; }
+# Esc walks out as a person does (reply field, conversation, inbox): text
+# typed while the pane holds the keys lands in it, `/crosstalk` as a reply.
+leave() {
+  for _ in 1 2 3; do
+    is_open || return 0
+    tmux send-keys -t "$SESSION" Escape
+    sleep 1
+  done
+}
 
 # Waits until the prompt is up, accepting the folder-trust dialog on the way.
 wait_ready() {
@@ -71,16 +80,16 @@ case "$cmd" in
       "env -u ANTHROPIC_API_KEY CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --model $MODEL \
        --settings '{\"crossSessionInbound\":\"accept\"}' $(plugin_args) $resume"
     wait_ready
-    # Its cross-session name is the folder's (--name only sets a display
-    # name): ListAgents tells it apart from others by its tmux location.
-    printf 'started %s: its ListAgents row reads "tmux %s:…"; message it as "<name> [<ref>]"\n' \
+    # Its cross-session name is the folder's with a suffix of its own (--name
+    # only sets a display name): ListAgents shows it with its tmux location.
+    printf 'started %s: its ListAgents row reads "tmux %s:…"; message it by that name\n' \
       "$SESSION" "$SESSION"
     ;;
   open | close)
     need
-    want=$([ "$cmd" = open ] && echo yes || echo no)
-    has=$(is_open && echo yes || echo no)
-    if [ "$want" != "$has" ]; then
+    if [ "$cmd" = close ]; then
+      leave
+    elif ! is_open; then
       tmux send-keys -t "$SESSION" C-u
       tmux send-keys -t "$SESSION" -l "/crosstalk"
       sleep 0.3
@@ -115,10 +124,9 @@ case "$cmd" in
     ;;
   reload)
     need
-    # Esc closes the pane (or leaves a field); C-u empties the composer, which
-    # must be empty for the command to run and for the pane to get the keys.
-    is_open && { tmux send-keys -t "$SESSION" Escape; sleep 1; }
-    is_open && { tmux send-keys -t "$SESSION" Escape; sleep 1; }
+    # C-u empties the composer, which must be empty for the command to run
+    # and for the pane to get the keys.
+    leave
     tmux send-keys -t "$SESSION" C-u
     tmux send-keys -t "$SESSION" -l "/reload-plugins"
     sleep 0.3

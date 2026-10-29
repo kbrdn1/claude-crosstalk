@@ -1,9 +1,19 @@
-import type { On, ToolCallInput } from 'claude-code'
+import type { On, ToolCallInput, UiOpenResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import * as Thread from '../hooks/thread'
-import { CROSSTALK, fromPeer, JOURNAL, LISTING, PANE, SESSION, textOf } from './fixtures'
+import {
+  CROSSTALK,
+  FROM_TEAMMATE,
+  fromPeer,
+  JOURNAL,
+  LISTING,
+  PANE,
+  SESSION,
+  textOf,
+  TO_TEAMMATE,
+} from './fixtures'
 
 const JOURNAL_FILE = '/home/me/.claude/projects/-work/s1.jsonl'
 
@@ -19,6 +29,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   const statuses: (string | undefined)[] = []
   const runs: (readonly string[])[] = []
   const store = new Map(Object.entries(stored))
+  const open: { result: UiOpenResult } = { result: { isPlaced: true } }
 
   const clock = mock.clock(on)
 
@@ -31,7 +42,15 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
 
     const stdout = e.argv[0] === 'find' ? `${JOURNAL_FILE}\n` : journal.join('\n')
 
-    return { value: { exitCode: 0, stdout, stderr: '' } }
+    return {
+      value: {
+        exitCode: 0,
+        stdout,
+        stderr: '',
+        isStdoutTruncated: false,
+        isStderrTruncated: false,
+      },
+    }
   })
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
   on('store.set', ($, e) => {
@@ -50,13 +69,18 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   on('tool.call', { tool: 'SendMessage' }, ($, e) => {
     sent.push(e)
 
+    if (Reflect.get(e, 'to') === 'alpha') {
+      return { result: TO_TEAMMATE }
+    }
+
     // What SendMessage answers for a recipient no session answers to.
     return Reflect.get(e, 'to') === 'gone'
       ? {
           result: {
             success: false,
-            message: 'No agent named gone',
-            display: 'Not sent — no agent named gone is reachable.',
+            message:
+              "No agent named 'gone' is reachable.\nUse ListAgents to see everyone you can message.",
+            display: "Not sent — no agent named 'gone' is reachable.",
           },
         }
       : { result: { success: true } }
@@ -65,7 +89,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   on('ui.open', ($, e) => {
     opened.push(e.id)
 
-    return { value: undefined }
+    return { value: open.result }
   })
   on('ui.panes', () => ({
     value: opened.map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })),
@@ -76,7 +100,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
     return { value: undefined }
   })
 
-  return { sent, opened, statuses, runs, store, clock }
+  return { sent, opened, statuses, runs, store, clock, open }
 }
 
 /**
@@ -136,6 +160,61 @@ describe('register', () => {
     await $.command.run(CROSSTALK)
 
     expect(textOf(await $.ui.render(PANE))).not.toContain('from my phone')
+  })
+
+  test("a teammate's message to this session is no peer message", async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    expect(await $.session.receive(FROM_TEAMMATE), 'passed on as it came').toEqual({
+      text: FROM_TEAMMATE.text,
+    })
+    await $.command.run(CROSSTALK)
+
+    const drawn = textOf(await $.ui.render(PANE))
+
+    expect(drawn).not.toContain('idle_notification')
+    expect(drawn).not.toContain('unknown session')
+  })
+
+  test('a send to a teammate is no peer message either', async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'SendMessage', to: 'alpha', message: '[demo] main-to-agent ping' })
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    expect(
+      (await ui.findAll({ type: 'Button' })).map(b => b.key).filter(k => k?.startsWith('open:')),
+    ).toEqual(['open:api', 'open:web'])
+  })
+
+  test("a delivery for one of this session's agents is not its own conversation", async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+
+    const forAgent = { ...fromPeer('api', 'for your subagent'), agentId: 'a4f662925677a1908' }
+
+    expect(await $.session.receive(forAgent), 'passed on as it came').toEqual({
+      text: forAgent.text,
+    })
+    await $.command.run(CROSSTALK)
+
+    expect(textOf(await $.ui.render(PANE))).not.toContain('for your subagent')
+  })
+
+  test("an unplaced pane says why, in the engine's words", async ($, on) => {
+    const w = world(on)
+
+    w.open.result = { isPlaced: false, reason: 'the reason the engine gives' }
+    await $.session.start(SESSION)
+
+    expect(await $.command.run(CROSSTALK)).toEqual({
+      text: 'crosstalk is open: the reason the engine gives',
+    })
   })
 
   test("the session's own SendMessage is drawn as sent", async ($, on) => {
@@ -274,7 +353,7 @@ describe('register', () => {
 
     expect(drawn, 'a refused reply is not drawn as sent').not.toContain('you there?')
     expect(drawn, 'the reason shows in the pane, which holds toasts').toContain(
-      'not sent: Not sent — no agent named gone is reachable.',
+      "not sent: Not sent — no agent named 'gone' is reachable.",
     )
   })
 

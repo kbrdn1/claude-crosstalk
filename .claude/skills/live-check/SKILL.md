@@ -35,11 +35,10 @@ script already knows the traps below.
    only sends it when the pane is closed.
 
 3. **Address it** by its `ListAgents` row, the one that reads
-   `tmux xtalk-live:…`, as `name [ref]` (for instance
-   `claude-crosstalk [369d54]`). Its name is the folder's, `claude-crosstalk`,
-   the same as any session opened in this repo, this one often included, so
-   the bare name is ambiguous. `claude --name` does not change it: it only
-   sets a display name. The ref changes with each `start`.
+   `tmux xtalk-live:…`. Its name is the folder's with a suffix of its own,
+   new at each `start` (for instance `claude-crosstalk-df`): the bare name
+   reaches it. `claude --name` does not change it: it only sets a display
+   name.
 
 4. **Act**:
    - A peer message: `SendMessage` to that name from this session.
@@ -97,7 +96,8 @@ with a fixture or test that pins it where the kit can.
 ## Traps
 
 - `/crosstalk` toggles. Run it on an open pane and it closes; `live.sh open`
-  and `close` avoid that.
+  and `close` avoid that. Never type it while the pane holds the keys: in a
+  conversation it is a reply, and it is sent. `close` uses `esc`.
 - Text left in the prompt blocks everything: the pane only takes the keys
   over an empty composer, and a slash command is not run. The script sends
   `C-u` before each command; do the same after stray typing.

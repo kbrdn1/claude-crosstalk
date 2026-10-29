@@ -15,8 +15,9 @@ hooks module (`hooks/register.ts`, `register(on, options)`, hooks
 - `hooks/thread.ts` — the conversation state, pure (no `$`).
 - `hooks/view.tsx` — the pane's tree, pure over a kit of elements.
 - `hooks/register.ts` — the only file that talks to the engine.
-- `types/claude-code.d.ts` — the plugin API as `/plugin-types` wrote it for
-  one Claude Code build (first line). Never edit it: `make types`.
+- `types/claude-code.d.ts` — the plugin API and the built-in tools as the
+  engine lays them beside a mod it loads (`.claude-plugin/types/`), for one
+  Claude Code build (first line). Never edit it: `make types`.
 
 ## Commands
 
@@ -65,19 +66,27 @@ Where tests go:
   access: read an event's shape in `types/claude-code.d.ts`, and confirm
   behaviour live in a real session sent real `SendMessage`s: the
   `live-check` skill (`.claude/skills/live-check/`) drives one in tmux.
-  Learnt that way:
-  - A local peer's envelope names it by `from-name`; its `from` is a socket
-    address. Session names change; sockets last as long as the process.
-  - A plugin's own `$.tool.call` and `$.ui.focus` do not run through its own
-    hooks: record the result, or note the ring, where the call succeeds.
-  - `$.session.messages()` hides peer deliveries (meta rows), hence the
-    journal read.
+  Learnt that way (last checked on 2.1.312):
+  - A local peer's delivery is origin `peer`; its envelope names it by
+    `from-name`, its `from` is a socket address. Session names change (a
+    new suffix each start); sockets last as long as the process.
+  - A teammate's message (agent teams) is a `peer` delivery too, with a
+    `teammate` and no envelope; a send to one answers with a `routing`.
+    This session's own agent, not a peer: neither is recorded.
+  - A plugin's own `$.tool.call` runs through its own `tool.call` hooks
+    when made inside one of its hooks (the engine logs it `nested`), not
+    from a closure (a timer, a press, a submit); its `$.ui.focus` from a
+    press raises no `ui.focus` of its own. Record the result, or note the
+    ring, where the call succeeds.
+  - `$.session.messages()` hides peer deliveries (meta rows);
+    `{ as: 'api' }` carries them, without their times: hence the journal
+    read.
   - A `SendMessage` nobody answers resolves `{ success: false }`, not an
     error.
-  - A pane takes the keys only when opened as a dialog (`focus`,
-    `closeOnEscape`, `holdToasts`) over an empty composer. Redrawing away
-    the element that holds them drops them to the prompt, and the pane can
-    ask them back only once they are there (`REFOCUS_MS`).
+  - A pane takes the keys when opened with `focus` over an empty composer
+    (`holdToasts` is not needed for it). Redrawing away the element that
+    holds them drops them to the prompt, and the pane can ask them back
+    only once they are there (`REFOCUS_MS`).
   - A person's close is `ui.close` with origin `person`.
   - A closure drawn in a tree reads that draw's state: what moves between
     two draws (the ring) is read at the press, in `register.ts`.
