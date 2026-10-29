@@ -80,6 +80,16 @@ function refusalOf(result: ToolCallResult): string | undefined {
 }
 
 /**
+ * Whether a SendMessage went to a teammate's mailbox, not to another session:
+ * its result carries `routing` (seen live on 2.1.312; typed `unknown`).
+ */
+function isTeamSend(result: ToolCallResult): boolean {
+  const record: unknown = result.result
+
+  return typeof record === 'object' && record !== null && 'routing' in record
+}
+
+/**
  * The lines of this session's journal worth parsing (Thread.fromJournal):
  * found by id under the config directory's projects/, filtered by grep so a
  * long journal is never read whole into the plugin.
@@ -412,7 +422,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => {
     const result = await next(e)
-    const isSent = refusalOf(result) === undefined && e.message !== replying
+    const isSent = refusalOf(result) === undefined && !isTeamSend(result) && e.message !== replying
 
     if (
       isSent &&

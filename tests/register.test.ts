@@ -12,6 +12,7 @@ import {
   PANE,
   SESSION,
   textOf,
+  TO_TEAMMATE,
 } from './fixtures'
 
 const JOURNAL_FILE = '/home/me/.claude/projects/-work/s1.jsonl'
@@ -66,6 +67,10 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   on('tool.call', { tool: 'ListAgents' }, () => ({ result: { listing: LISTING } }))
   on('tool.call', { tool: 'SendMessage' }, ($, e) => {
     sent.push(e)
+
+    if (Reflect.get(e, 'to') === 'alpha') {
+      return { result: TO_TEAMMATE }
+    }
 
     // What SendMessage answers for a recipient no session answers to.
     return Reflect.get(e, 'to') === 'gone'
@@ -160,13 +165,29 @@ describe('register', () => {
     world(on)
 
     await $.session.start(SESSION)
-    await $.session.receive(FROM_TEAMMATE)
+    expect(await $.session.receive(FROM_TEAMMATE), 'passed on as it came').toEqual({
+      text: FROM_TEAMMATE.text,
+    })
     await $.command.run(CROSSTALK)
 
     const drawn = textOf(await $.ui.render(PANE))
 
     expect(drawn).not.toContain('idle_notification')
     expect(drawn).not.toContain('unknown session')
+  })
+
+  test('a send to a teammate is no peer message either', async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'SendMessage', to: 'alpha', message: '[demo] main-to-agent ping' })
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    expect(
+      (await ui.findAll({ type: 'Button' })).map(b => b.key).filter(k => k?.startsWith('open:')),
+    ).toEqual(['open:api', 'open:web'])
   })
 
   test("the session's own SendMessage is drawn as sent", async ($, on) => {
