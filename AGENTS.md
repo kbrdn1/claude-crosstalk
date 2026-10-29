@@ -15,8 +15,9 @@ hooks module (`hooks/register.ts`, `register(on, options)`, hooks
 - `hooks/thread.ts` — the conversation state, pure (no `$`).
 - `hooks/view.tsx` — the pane's tree, pure over a kit of elements.
 - `hooks/register.ts` — the only file that talks to the engine.
-- `types/claude-code.d.ts` — the plugin API as `/plugin-types` wrote it for
-  one Claude Code build (first line). Never edit it: `make types`.
+- `types/claude-code.d.ts` — the plugin API and the built-in tools as the
+  engine lays them beside a mod it loads (`.claude-plugin/types/`), for one
+  Claude Code build (first line). Never edit it: `make types`.
 
 ## Commands
 

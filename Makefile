@@ -37,11 +37,25 @@ help: ## Show this help
 dev: ## Start Claude Code with this checkout loaded as a mod (nothing installed)
 	$(WITH_MODS) $(CLAUDE) --plugin-dir .
 
+# The engine lays its declarations beside a mod it loads from a folder,
+# under .claude-plugin/types/ (git-ignored by its own .gitignore): the API
+# (claude-code), the built-in tools' inputs and results (claude-code-tools),
+# and the session's MCP tools (claude-code-mcp, left out: machine-specific).
+# A headless load lays them only with CLAUDE_CODE_PLUGIN_DIR_WATCH=1, read in
+# the binary, not documented. No settings, so any machine writes the same
+# file; `/cost` is answered locally and `--tools ""` leaves the model no tool:
+# a prompt the engine did not take as a command can never run `make types`.
+TYPE_ROOT := .claude-plugin/types
+
 types: ## Regenerate types/claude-code.d.ts from the installed Claude Code
 	@printf "${YELLOW}Writing the plugin API declarations...${NC}\n"
-	@rm -rf .claude/types
-	$(WITH_MODS) $(CLAUDE) -p "/plugin-types" > /dev/null
-	cp .claude/types/claude-code.d.ts types/claude-code.d.ts
+	@rm -rf $(TYPE_ROOT)
+	$(WITH_MODS) CLAUDE_CODE_PLUGIN_DIR_WATCH=1 $(CLAUDE) -p --setting-sources '' --plugin-dir . \
+		--tools '' --no-session-persistence /cost > /dev/null
+	@test -f $(TYPE_ROOT)/claude-code/index.d.ts \
+		|| { printf "${RED}the engine laid no declarations in $(TYPE_ROOT)${NC}\n"; exit 1; }
+	cat $(TYPE_ROOT)/claude-code/index.d.ts $(TYPE_ROOT)/claude-code-tools/index.d.ts \
+		> types/claude-code.d.ts
 	@head -1 types/claude-code.d.ts | grep -qF "Claude Code $$($(CLAUDE) --version | cut -d' ' -f1)." \
 		|| { printf "${RED}types/claude-code.d.ts does not name the installed build${NC}\n"; exit 1; }
 	@printf "${GREEN}types/claude-code.d.ts: $$(head -1 types/claude-code.d.ts)${NC}\n"
