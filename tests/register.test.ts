@@ -190,6 +190,21 @@ describe('register', () => {
     ).toEqual(['open:api', 'open:web'])
   })
 
+  test("a delivery for one of this session's agents is not its own conversation", async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+
+    const forAgent = { ...fromPeer('api', 'for your subagent'), agentId: 'a4f662925677a1908' }
+
+    expect(await $.session.receive(forAgent), 'passed on as it came').toEqual({
+      text: forAgent.text,
+    })
+    await $.command.run(CROSSTALK)
+
+    expect(textOf(await $.ui.render(PANE))).not.toContain('for your subagent')
+  })
+
   test("the session's own SendMessage is drawn as sent", async ($, on) => {
     world(on)
 

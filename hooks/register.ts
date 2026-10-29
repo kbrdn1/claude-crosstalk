@@ -403,9 +403,10 @@ export const register: Register = on => {
   })
 
   on('session.receive', { origin: PEER_ORIGINS }, async ($, e, next) => {
-    // A teammate writes through the agent-team mailbox: one of this
-    // session's own agents, not another session.
-    if ('teammate' in e.origin) {
+    // A teammate writes through the agent-team mailbox, and a delivery with
+    // an agentId is for one of this session's agents: neither is a message
+    // between this session's conversation and another session.
+    if ('teammate' in e.origin || e.agentId !== undefined) {
       return next(e)
     }
 
