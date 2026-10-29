@@ -65,7 +65,7 @@ export const UNKNOWN_PEER = 'unknown session'
  * grep pattern, so a long journal is never read whole.
  */
 export const JOURNAL_PATTERN =
-  '"origin":\\{"kind":"peer|"name":"SendMessage","input":|"routing":\\{"sender"'
+  '"origin":\\{"kind":"peer|"name":"SendMessage","input":|"routing":\\{'
 
 // Global: only ever used through matchAll, which clones it. A module-level
 // /g regex is stateful under .test() or .exec(): do not.
