@@ -76,7 +76,7 @@ body:
     attributes:
       label: crosstalk version
       description: Output of `make version`, or the version `/plugin` shows.
-      placeholder: "crosstalk 0.1.0 · types from 2.1.277"
+      placeholder: "crosstalk 0.1.1 · types from 2.1.312"
     validations:
       required: true
 
