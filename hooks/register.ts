@@ -393,6 +393,12 @@ export const register: Register = on => {
   })
 
   on('session.receive', { origin: PEER_ORIGINS }, async ($, e, next) => {
+    // A teammate writes through the agent-team mailbox: one of this
+    // session's own agents, not another session.
+    if ('teammate' in e.origin) {
+      return next(e)
+    }
+
     const { peer, text, address } = Thread.inboundOf(e.text)
     const known = Thread.withAlias(thread, address, peer)
 

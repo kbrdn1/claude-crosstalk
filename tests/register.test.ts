@@ -3,7 +3,16 @@ import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import * as Thread from '../hooks/thread'
-import { CROSSTALK, fromPeer, JOURNAL, LISTING, PANE, SESSION, textOf } from './fixtures'
+import {
+  CROSSTALK,
+  FROM_TEAMMATE,
+  fromPeer,
+  JOURNAL,
+  LISTING,
+  PANE,
+  SESSION,
+  textOf,
+} from './fixtures'
 
 const JOURNAL_FILE = '/home/me/.claude/projects/-work/s1.jsonl'
 
@@ -145,6 +154,19 @@ describe('register', () => {
     await $.command.run(CROSSTALK)
 
     expect(textOf(await $.ui.render(PANE))).not.toContain('from my phone')
+  })
+
+  test("a teammate's message to this session is no peer message", async ($, on) => {
+    world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(FROM_TEAMMATE)
+    await $.command.run(CROSSTALK)
+
+    const drawn = textOf(await $.ui.render(PANE))
+
+    expect(drawn).not.toContain('idle_notification')
+    expect(drawn).not.toContain('unknown session')
   })
 
   test("the session's own SendMessage is drawn as sent", async ($, on) => {

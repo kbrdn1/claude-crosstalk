@@ -64,6 +64,15 @@ export function fromPeer(peer: string, text: string) {
 }
 
 /**
+ * A teammate's message to this session through the agent-team mailbox, as a
+ * live 2.1.312 session with agent teams on received it: no envelope.
+ */
+export const FROM_TEAMMATE = {
+  origin: { kind: 'peer' as const, teammate: 'alpha', isVerified: false },
+  text: '{"type":"idle_notification","from":"alpha","timestamp":"2026-10-29T13:38:40.985Z","idleReason":"available","summary":"[to beta] ping beta, demo agent-to-agent","result":"Message envoyé à beta (msg_id 7682c50b-0fd4-4020-ba29-be98ea74ba7e), la livraison est confirmée par le retour `success: true`."}',
+}
+
+/**
  * A rendered tree's text as it reads: its strings, a Button's label and a
  * Markdown's text, in order.
  */
