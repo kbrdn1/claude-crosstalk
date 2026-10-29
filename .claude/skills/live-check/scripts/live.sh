@@ -78,9 +78,15 @@ case "$cmd" in
     ;;
   open | close)
     need
-    want=$([ "$cmd" = open ] && echo yes || echo no)
-    has=$(is_open && echo yes || echo no)
-    if [ "$want" != "$has" ]; then
+    if [ "$cmd" = close ]; then
+      # Esc walks out as a person does (reply field, conversation, inbox):
+      # `/crosstalk` typed while the pane holds the keys is a reply, sent.
+      for _ in 1 2 3; do
+        is_open || break
+        tmux send-keys -t "$SESSION" Escape
+        sleep 1
+      done
+    elif ! is_open; then
       tmux send-keys -t "$SESSION" C-u
       tmux send-keys -t "$SESSION" -l "/crosstalk"
       sleep 0.3
