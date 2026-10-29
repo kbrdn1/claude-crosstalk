@@ -456,7 +456,8 @@ export const register: Register = on => {
       return { text: 'crosstalk closed' }
     }
 
-    await host.open()
+    const placed = await host.open()
+
     isOpen = true
     view = 'inbox'
     back = 0
@@ -470,11 +471,7 @@ export const register: Register = on => {
     refresh ??= host.every(REFRESH_MS, () => void refreshPeers())
     redraw()
 
-    const pane = (await host.panes()).find(p => p.id === PANE_ID)
-
-    return pane?.isPlaced === false
-      ? { text: 'crosstalk is open: widen the terminal to 110 columns to see it' }
-      : {}
+    return placed.isPlaced ? {} : { text: `crosstalk is open: ${placed.reason}` }
   })
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {

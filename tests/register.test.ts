@@ -1,4 +1,4 @@
-import type { On, ToolCallInput } from 'claude-code'
+import type { On, ToolCallInput, UiOpenResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
@@ -29,6 +29,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   const statuses: (string | undefined)[] = []
   const runs: (readonly string[])[] = []
   const store = new Map(Object.entries(stored))
+  const open: { result: UiOpenResult } = { result: { isPlaced: true } }
 
   const clock = mock.clock(on)
 
@@ -88,7 +89,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   on('ui.open', ($, e) => {
     opened.push(e.id)
 
-    return { value: { isPlaced: true as const } }
+    return { value: open.result }
   })
   on('ui.panes', () => ({
     value: opened.map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })),
@@ -99,7 +100,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
     return { value: undefined }
   })
 
-  return { sent, opened, statuses, runs, store, clock }
+  return { sent, opened, statuses, runs, store, clock, open }
 }
 
 /**
@@ -203,6 +204,17 @@ describe('register', () => {
     await $.command.run(CROSSTALK)
 
     expect(textOf(await $.ui.render(PANE))).not.toContain('for your subagent')
+  })
+
+  test("an unplaced pane says why, in the engine's words", async ($, on) => {
+    const w = world(on)
+
+    w.open.result = { isPlaced: false, reason: 'the reason the engine gives' }
+    await $.session.start(SESSION)
+
+    expect(await $.command.run(CROSSTALK)).toEqual({
+      text: 'crosstalk is open: the reason the engine gives',
+    })
   })
 
   test("the session's own SendMessage is drawn as sent", async ($, on) => {
