@@ -31,7 +31,15 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
 
     const stdout = e.argv[0] === 'find' ? `${JOURNAL_FILE}\n` : journal.join('\n')
 
-    return { value: { exitCode: 0, stdout, stderr: '' } }
+    return {
+      value: {
+        exitCode: 0,
+        stdout,
+        stderr: '',
+        isStdoutTruncated: false,
+        isStderrTruncated: false,
+      },
+    }
   })
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
   on('store.set', ($, e) => {
@@ -55,8 +63,9 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
       ? {
           result: {
             success: false,
-            message: 'No agent named gone',
-            display: 'Not sent — no agent named gone is reachable.',
+            message:
+              "No agent named 'gone' is reachable.\nUse ListAgents to see everyone you can message.",
+            display: "Not sent — no agent named 'gone' is reachable.",
           },
         }
       : { result: { success: true } }
@@ -65,7 +74,7 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
   on('ui.open', ($, e) => {
     opened.push(e.id)
 
-    return { value: undefined }
+    return { value: { isPlaced: true as const } }
   })
   on('ui.panes', () => ({
     value: opened.map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })),
@@ -274,7 +283,7 @@ describe('register', () => {
 
     expect(drawn, 'a refused reply is not drawn as sent').not.toContain('you there?')
     expect(drawn, 'the reason shows in the pane, which holds toasts').toContain(
-      'not sent: Not sent — no agent named gone is reachable.',
+      "not sent: Not sent — no agent named 'gone' is reachable.",
     )
   })
 

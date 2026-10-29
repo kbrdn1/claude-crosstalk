@@ -4,6 +4,7 @@ import type {
   Timer,
   ToolCallArgs,
   ToolCallResult,
+  UiOpenResult,
   UiPane,
 } from 'claude-code'
 
@@ -23,7 +24,10 @@ export const FOCUS_RETRY_MS = 150
 // have to have fallen back to the prompt, or the ask is refused.
 export const REFOCUS_MS = 400
 
-const PEER_ORIGINS = { kind: ['peer', 'peer-send-message'] } as const
+// A local session's delivery is `peer` (seen live on 2.1.312); 2.1.277 named
+// another session's SendMessage `peer-send-message`. Two members of the
+// origin union, which a kind array cannot span: one RegExp.
+const PEER_ORIGINS = { kind: /^peer(-send-message)?$/ }
 
 // An inbox row's key: the prefix, then the peer's name.
 const ROW_PREFIX = 'open:'
@@ -45,7 +49,7 @@ type Host = {
   after: (ms: number, fn: () => void) => Timer
   invalidate: () => void
   status: (text: string | undefined) => void
-  open: () => Promise<void>
+  open: () => Promise<UiOpenResult>
   close: () => Promise<void>
   focus: (key: string) => Promise<boolean>
   panes: () => Promise<readonly UiPane[]>
