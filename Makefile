@@ -42,9 +42,10 @@ dev: ## Start Claude Code with this checkout loaded as a mod (nothing installed)
 # (claude-code), the built-in tools' inputs and results (claude-code-tools),
 # and the session's MCP tools (claude-code-mcp, left out: machine-specific).
 # A headless load lays them only with CLAUDE_CODE_PLUGIN_DIR_WATCH=1, read in
-# the binary, not documented. No settings, so any machine writes the same
-# file; `/cost` is answered locally and `--tools ""` leaves the model no tool:
-# a prompt the engine did not take as a command can never run `make types`.
+# the binary, not documented. No settings, so they do not shape the output
+# (two runs, same file); `/cost` is answered locally and `--tools ""` leaves
+# the model no tool: a prompt the engine did not take as a command can never
+# run `make types`.
 TYPE_ROOT := .claude-plugin/types
 
 types: ## Regenerate types/claude-code.d.ts from the installed Claude Code
