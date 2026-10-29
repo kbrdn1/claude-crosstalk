@@ -2,13 +2,13 @@
 #
 # Placeholders supported in paths/patterns: {repo} {home} {repo_path}
 # {repo_parent} {type} {issue} {desc}. {repo_parent} = the dir containing the
-# repo. `base = "{repo_parent}/worktrees/{repo}"` keeps every worktree under
-# <repo_parent>/worktrees/<repo>/…, mirroring Zed's default
-# git.worktree_directory = "../worktrees".
+# repo. `base = "{repo_parent}/{repo}-worktrees"` keeps every worktree under
+# <repo_parent>/<repo>-worktrees/…, where MonoCode's "Create worktree" puts
+# its own.
 # Docs: https://github.com/kbrdn1/claude-crosstalk
 
 [worktree]
-base           = "{repo_parent}/worktrees/{repo}"
+base           = "{repo_parent}/{repo}-worktrees"
 path_pattern   = "{type}-{issue}-{desc}"
 branch_pattern = "{type}/#{issue}-{desc}"
 
