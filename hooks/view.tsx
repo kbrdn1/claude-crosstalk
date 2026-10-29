@@ -379,7 +379,7 @@ function groupView(kit: Kit, group: Group, width: number): RenderElement {
       {group.day === undefined ? null : <Box justifyContent="center">{rule(kit, group.day)}</Box>}
       <Box justifyContent={onRight ? 'flex-end' : 'flex-start'}>
         <Text>
-          <Text bold color={color}>
+          <Text weight="semibold" color={color}>
             {isMine ? 'you' : group.peer}
           </Text>
           <Text dimColor>{time}</Text>
@@ -418,7 +418,7 @@ function header(kit: Kit, thread: Thread.Thread): RenderElement {
 
   return (
     <Box justifyContent="space-between">
-      <Text bold color={COLORS.accent}>
+      <Text weight="semibold" color={COLORS.accent}>
         crosstalk
       </Text>
       <Text dimColor>{truncate(self, Math.max(0, kit.columns - 12))}</Text>
@@ -467,7 +467,7 @@ function inboxView(kit: Kit, thread: Thread.Thread): RenderElement {
                   />
                 </Box>
                 <Text>
-                  <Text bold color={COLORS.accent}>
+                  <Text weight="semibold" color={COLORS.accent}>
                     {badge ? `${badge}  ` : ''}
                   </Text>
                   <Text dimColor>{time}</Text>
@@ -519,11 +519,11 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
             onPress={() => kit.onInbox()}
           />
           <Text>
-            <Text bold color={COLORS.peer}>{` ${name}`}</Text>
+            <Text weight="semibold" color={COLORS.peer}>{` ${name}`}</Text>
             <Text color={color}>{status ? ` · ${status}` : ''}</Text>
           </Text>
         </Box>
-        <Text bold color={COLORS.accent}>
+        <Text weight="semibold" color={COLORS.accent}>
           {badge}
         </Text>
       </Box>
@@ -565,7 +565,7 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
       )}
 
       <Box>
-        <Text bold color={COLORS.accent}>
+        <Text weight="semibold" color={COLORS.accent}>
           {'❯ '}
         </Text>
         <Input
