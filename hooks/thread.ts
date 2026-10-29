@@ -60,11 +60,12 @@ export const MAX_ENTRIES = 200
 export const UNKNOWN_PEER = 'unknown session'
 
 /**
- * The session journal lines worth parsing: a peer delivery (its `origin`)
- * and a SendMessage call. A grep pattern, so a long journal is never read
- * whole.
+ * The session journal lines worth parsing: a peer delivery (its `origin`),
+ * a SendMessage call, and a tool result routed to a teammate's mailbox. A
+ * grep pattern, so a long journal is never read whole.
  */
-export const JOURNAL_PATTERN = '"origin":\\{"kind":"peer|"name":"SendMessage","input":'
+export const JOURNAL_PATTERN =
+  '"origin":\\{"kind":"peer|"name":"SendMessage","input":|"routing":\\{'
 
 // Global: only ever used through matchAll, which clones it. A module-level
 // /g regex is stateful under .test() or .exec(): do not.
@@ -329,6 +330,23 @@ export function savedAtOf(value: unknown): number {
 }
 
 /**
+ * The tool_use ids a journal row answers with a result routed to a teammate's
+ * mailbox (its `toolUseResult.routing`).
+ */
+function teammateSendsOf(row: Record<string, unknown>): string[] {
+  const result = isRecord(row.toolUseResult) ? row.toolUseResult : {}
+  const message = isRecord(row.message) ? row.message : {}
+
+  if (!isRecord(result.routing) || !Array.isArray(message.content)) {
+    return []
+  }
+
+  return message.content.flatMap(block =>
+    isRecord(block) && typeof block.tool_use_id === 'string' ? [block.tool_use_id] : [],
+  )
+}
+
+/**
  * The thread a session journal already holds, every message read: peer
  * deliveries (a `user` row or a `queued_command` attachment carrying an
  * `origin` of kind peer*, one per `msg_id`) and the model's SendMessage
@@ -341,21 +359,20 @@ export function savedAtOf(value: unknown): number {
  */
 export function fromJournal(lines: readonly string[]): Thread {
   const seen = new Set<string>()
+  const rows = lines.flatMap(line => {
+    try {
+      const row: unknown = JSON.parse(line)
+
+      return isRecord(row) ? [row] : []
+    } catch {
+      return []
+    }
+  })
+  // A send whose result came back routed went to a teammate (2.1.312).
+  const toTeammates = new Set(rows.flatMap(teammateSendsOf))
   let thread = EMPTY
 
-  for (const line of lines) {
-    let row: unknown
-
-    try {
-      row = JSON.parse(line)
-    } catch {
-      continue
-    }
-
-    if (!isRecord(row)) {
-      continue
-    }
-
+  for (const row of rows) {
     const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : Number.NaN
     const time = Number.isNaN(at) ? {} : { at }
     const attachment = isRecord(row.attachment) ? row.attachment : {}
@@ -398,6 +415,7 @@ export function fromJournal(lines: readonly string[]): Thread {
           isRecord(block) &&
           block.type === 'tool_use' &&
           block.name === 'SendMessage' &&
+          !toTeammates.has(String(block.id)) &&
           typeof input.to === 'string' &&
           typeof input.message === 'string'
 

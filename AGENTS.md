@@ -2,7 +2,8 @@
 
 This file is the project-level AGENTS.md. Anything stated here OVERRIDES
 defaults and applies to every contribution made via an AI assistant in
-this repository. `CLAUDE.md` is a verbatim copy for Claude-based tools.
+this repository. `CLAUDE.md` mirrors it for Claude-based tools (only its
+self-references differ); keep the two in step.
 
 ## What this repo is
 
@@ -14,8 +15,24 @@ hooks module (`hooks/register.ts`, `register(on, options)`, hooks
 - `hooks/thread.ts` — the conversation state, pure (no `$`).
 - `hooks/view.tsx` — the pane's tree, pure over a kit of elements.
 - `hooks/register.ts` — the only file that talks to the engine.
-- `types/claude-code.d.ts` — the plugin API as `/plugin-types` wrote it for
-  one Claude Code build (first line). Never edit it: `make types`.
+- `types/claude-code.d.ts` — the plugin API and the built-in tools as the
+  engine lays them beside a mod it loads (`.claude-plugin/types/`), for one
+  Claude Code build (first line). Never edit it: `make types`.
+
+## Commands
+
+- `make ci` before every push: `fmt-check` (oxfmt), `lint` (oxlint),
+  `typecheck` (tsc), `validate`, `test`. The first three run through
+  `bunx` at versions pinned in the Makefile: they need `bun`, nothing is
+  installed in the repo. `make fmt` rewrites hooks/ and tests/ in place.
+- Outside `make`, `claude plugin test .` and `claude plugin validate .` need
+  `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`. `claude plugin test` runs every
+  `*.test.ts*`: there is no single-test filter.
+- `make dev` loads this checkout in a session without installing. An
+  installed copy from this checkout loads in place: `/reload-plugins`
+  picks up an edit.
+- CI installs exactly the Claude Code build named on line 1 of
+  `types/claude-code.d.ts`.
 
 ## 🔴 Primordial rule — Test-Driven Development is mandatory
 
@@ -31,35 +48,48 @@ sent back.
 Where tests go:
 
 - Pure state (`hooks/thread.ts`) → `tests/thread.test.ts`.
+- The pane (`hooks/view.tsx`) → `tests/view.test.ts`: render `paneView` as
+  a pure function over fake element constructors (`FAKE_UI`, `kitOf`,
+  `press`). The kit cannot move the focus ring or raise a person's `esc`.
 - Anything through the engine (a hook, the pane, a command) →
   `tests/register.test.ts`: seat what lies beneath with `on(...)` stubs
   (`world(on)`), drive with `$.session.*`, `$.tool.call`, `$.command.run`,
-  read the pane with `$.ui.render(PANE)` or `$.ui.mount(...)`.
-- A behaviour seen live that the kit cannot reach (focus, a real peer's
-  envelope) → reproduce its input as a fixture in `tests/fixtures.ts`.
+  `$.ui.press` (`opened($, peer)` opens a conversation), read the pane with
+  `$.ui.render(PANE)` or `$.ui.mount(...)`.
+- Shared inputs live in `tests/fixtures.ts`. An input seen live that the
+  kit cannot produce (a real peer's envelope, a journal line) is copied
+  there.
 
 ## Other house rules
 
 - **The engine is the source of truth, not the docs.** Mods are early
-  access; before relying on an event or a result shape, read it in
-  `types/claude-code.d.ts`, and when behaviour matters, confirm it live with
-  `make dev` (a second session sending `SendMessage`). Facts learnt that
-  way: a local peer's envelope names it by `from-name`, its `from` is a
-  socket address; a plugin's own `$.tool.call` does not run through its own
-  `tool.call` hook; `$.session.messages()` hides peer deliveries (meta rows,
-  hence the journal read); a SendMessage nobody answers resolves
-  `{ success: false }`, not an error; session names change, sockets hold
-  for the life of the process; a pane takes the keyboard only opened as a
-  dialog (`focus`, `closeOnEscape`, `holdToasts`) over an empty composer,
-  and a pane's digit hotkeys fire from an empty prompt too; redrawing away
-  the element that holds the keys drops them to the prompt, and the pane
-  can ask for them back only once they are there (`REFOCUS_MS`); a person's
-  close is `ui.close` with origin `person`, which the kit cannot raise;
-  a plugin's own `$.ui.focus` raises no `ui.focus` to it (note the ring when
-  the move succeeds), and the kit refuses it, so a view is tested as a pure
-  function over fake element constructors (`tests/view.test.ts`); a closure
-  drawn in a tree reads that draw's state, so what can move between two
-  draws (the ring) is read at the press, in `register.ts`.
+  access: read an event's shape in `types/claude-code.d.ts`, and confirm
+  behaviour live in a real session sent real `SendMessage`s: the
+  `live-check` skill (`.claude/skills/live-check/`) drives one in tmux.
+  Learnt that way (last checked on 2.1.312):
+  - A local peer's delivery is origin `peer`; its envelope names it by
+    `from-name`, its `from` is a socket address. Session names change (a
+    new suffix each start); sockets last as long as the process.
+  - A teammate's message (agent teams) is a `peer` delivery too, with a
+    `teammate` and no envelope; a send to one answers with a `routing`.
+    This session's own agent, not a peer: neither is recorded.
+  - A plugin's own `$.tool.call` runs through its own `tool.call` hooks
+    when made inside one of its hooks (the engine logs it `nested`), not
+    from a closure (a timer, a press, a submit); its `$.ui.focus` from a
+    press raises no `ui.focus` of its own. Record the result, or note the
+    ring, where the call succeeds.
+  - `$.session.messages()` hides peer deliveries (meta rows);
+    `{ as: 'api' }` carries them, without their times: hence the journal
+    read.
+  - A `SendMessage` nobody answers resolves `{ success: false }`, not an
+    error.
+  - A pane takes the keys when opened with `focus` over an empty composer
+    (`holdToasts` is not needed for it). Redrawing away the element that
+    holds them drops them to the prompt, and the pane can ask them back
+    only once they are there (`REFOCUS_MS`).
+  - A person's close is `ui.close` with origin `person`.
+  - A closure drawn in a tree reads that draw's state: what moves between
+    two draws (the ring) is read at the press, in `register.ts`.
 - **Record, never rewrite.** crosstalk observes `session.receive` and
   `tool.call`; it passes `e` on unchanged and never consumes a delivery.
 - **After a Claude Code update**: `make types`, then `make ci`. A diff in
@@ -68,13 +98,13 @@ Where tests go:
   `changelogs/<version>.md` (or `changelogs/pre-releases/<version>.md`) and
   fails when it is missing. `.claude-plugin/plugin.json` `version` must
   equal the tag.
-- **Indentation**: 2 spaces, no semicolons, single quotes (match the files).
-- **Branch convention**: `<type>/#<issue>-<description>`. Worktrees via
-  `gwm` (`.gwm.toml`).
-- **Commit format**: Gitmoji + Conventional Commits. See
-  [CONTRIBUTING.md](CONTRIBUTING.md#commits).
-- **Merge strategy**: regular merge commit, never squash, never delete the
-  source branch.
+- **Style**: oxfmt owns the layout (`.oxfmtrc.json`: 2 spaces, no
+  semicolons, single quotes, 100 columns); run `make fmt`, never hand-align.
+  Use `import type` for types. A hooks module has no DOM and no Node: every
+  effect goes through `$`.
+- **Git**: branches `<type>/#<issue>-<description>` (`#0` without an issue),
+  Gitmoji + Conventional Commits, merge commits only (never squash, never
+  delete the branch). Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Where to look for the rest
 

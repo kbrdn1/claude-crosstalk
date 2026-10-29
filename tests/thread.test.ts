@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import * as Thread from '../hooks/thread'
-import { AT, JOURNAL, LISTING } from './fixtures'
+import { AT, JOURNAL, JOURNAL_2_1_312, LISTING } from './fixtures'
 
 describe('thread', () => {
   test('a peer delivery names its sender and loses its envelope', async () => {
@@ -77,6 +77,17 @@ describe('thread', () => {
     expect(JOURNAL.map(line => pattern.test(line))).toEqual([false, true, true, true, true, false])
   })
 
+  test('a 2.1.312 journal: a send to a teammate is no message, a blob row no second send', async () => {
+    const pattern = new RegExp(Thread.JOURNAL_PATTERN)
+    const thread = Thread.fromJournal(JOURNAL_2_1_312.filter(line => pattern.test(line)))
+
+    expect(thread.entries.map(e => [e.dir, e.peer, e.text.slice(0, 30)])).toEqual([
+      ['in', 'claude-crosstalk-be', '[demo] crosstalk live check: w'],
+      ['out', 'claude-crosstalk-3e', '[demo] crosstalk live check of'],
+    ])
+    expect(thread.aliases).toEqual({ 'uds:/tmp/cc-socks/6971.sock': 'claude-crosstalk-be' })
+  })
+
   test("a reply at a peer's socket address files under its name", async () => {
     const thread = Thread.withAlias(Thread.EMPTY, 'uds:/tmp/cc-socks/1.sock', 'api')
 
@@ -111,10 +122,17 @@ describe('thread', () => {
     const thread = Thread.fromJournal(JOURNAL)
     const saved = JSON.parse(JSON.stringify(Thread.toSaved(thread, 42)))
 
-    expect(Thread.fromSaved(saved)).toEqual({ ...Thread.EMPTY, entries: thread.entries, aliases: thread.aliases, selected: 'web' })
+    expect(Thread.fromSaved(saved)).toEqual({
+      ...Thread.EMPTY,
+      entries: thread.entries,
+      aliases: thread.aliases,
+      selected: 'web',
+    })
     expect(Thread.savedAtOf(saved)).toBe(42)
     expect(Thread.fromSaved('garbage')).toBeUndefined()
-    expect(Thread.fromSaved({ entries: [{ dir: 'in', peer: 1 }], aliases: {} })?.entries).toEqual([])
+    expect(Thread.fromSaved({ entries: [{ dir: 'in', peer: 1 }], aliases: {} })?.entries).toEqual(
+      [],
+    )
   })
 
   test('history is capped, oldest first out', async () => {

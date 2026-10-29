@@ -1,8 +1,12 @@
-.PHONY: help dev types typecheck validate test ci install enable-mods update uninstall version
+.PHONY: help dev types typecheck lint fmt fmt-check validate test ci install enable-mods update uninstall version
 
 SHELL := /bin/bash
 CLAUDE ?= claude
-TS_VERSION ?= 5.9.3
+TS_VERSION ?= 7.0.2
+OXLINT_VERSION ?= 1.90.0
+OXFMT_VERSION ?= 0.75.0
+# What oxlint and oxfmt read: never types/ (generated) nor the docs.
+SOURCES := hooks tests
 
 MARKETPLACE := claude-crosstalk
 PLUGIN := crosstalk@$(MARKETPLACE)
@@ -33,11 +37,27 @@ help: ## Show this help
 dev: ## Start Claude Code with this checkout loaded as a mod (nothing installed)
 	$(WITH_MODS) $(CLAUDE) --plugin-dir .
 
+# The engine lays its declarations beside a mod it loads from a folder,
+# under .claude-plugin/types/ (git-ignored by its own .gitignore): the API
+# (claude-code), the built-in tools' inputs and results (claude-code-tools),
+# and the session's MCP tools (claude-code-mcp, left out: machine-specific).
+# A headless load lays them only with CLAUDE_CODE_PLUGIN_DIR_WATCH=1, read in
+# the binary, not documented. No settings and no ANTHROPIC_API_KEY (a key
+# drops the claude.ai-only tool fields): the API half is the build's alone,
+# the tools half also follows the account's feature gates, which move. `/cost`
+# is answered locally and `--tools ""` leaves the model no tool: a prompt the
+# engine did not take as a command can never run `make types`.
+TYPE_ROOT := .claude-plugin/types
+
 types: ## Regenerate types/claude-code.d.ts from the installed Claude Code
 	@printf "${YELLOW}Writing the plugin API declarations...${NC}\n"
-	@rm -rf .claude/types
-	$(WITH_MODS) $(CLAUDE) -p "/plugin-types" > /dev/null
-	cp .claude/types/claude-code.d.ts types/claude-code.d.ts
+	@rm -rf $(TYPE_ROOT)
+	$(WITH_MODS) CLAUDE_CODE_PLUGIN_DIR_WATCH=1 env -u ANTHROPIC_API_KEY $(CLAUDE) -p \
+		--setting-sources '' --plugin-dir . --tools '' --no-session-persistence /cost > /dev/null
+	@# Joined beside them first: a half missing leaves the pinned copy whole.
+	cat $(TYPE_ROOT)/claude-code/index.d.ts $(TYPE_ROOT)/claude-code-tools/index.d.ts \
+		> $(TYPE_ROOT)/joined.d.ts
+	mv $(TYPE_ROOT)/joined.d.ts types/claude-code.d.ts
 	@head -1 types/claude-code.d.ts | grep -qF "Claude Code $$($(CLAUDE) --version | cut -d' ' -f1)." \
 		|| { printf "${RED}types/claude-code.d.ts does not name the installed build${NC}\n"; exit 1; }
 	@printf "${GREEN}types/claude-code.d.ts: $$(head -1 types/claude-code.d.ts)${NC}\n"
@@ -51,6 +71,15 @@ typecheck: ## Typecheck hooks and tests against types/
 	bunx -p typescript@$(TS_VERSION) tsc -p tsconfig.json
 	@printf "${GREEN}Typecheck clean.${NC}\n"
 
+lint: ## Lint hooks and tests (oxlint, .oxlintrc.json)
+	bunx -p oxlint@$(OXLINT_VERSION) oxlint --deny-warnings $(SOURCES)
+
+fmt: ## Format hooks and tests in place (oxfmt, .oxfmtrc.json)
+	bunx -p oxfmt@$(OXFMT_VERSION) oxfmt $(SOURCES)
+
+fmt-check: ## Check hooks and tests are formatted, writing nothing
+	bunx -p oxfmt@$(OXFMT_VERSION) oxfmt --check $(SOURCES)
+
 validate: ## Read the plugin the way the engine will (manifest, hooks, calls)
 	$(WITH_MODS) $(CLAUDE) plugin validate .claude-plugin/plugin.json
 	$(WITH_MODS) $(CLAUDE) plugin validate .
@@ -58,7 +87,7 @@ validate: ## Read the plugin the way the engine will (manifest, hooks, calls)
 test: ## Run the mod's tests (claude plugin test)
 	$(WITH_MODS) $(CLAUDE) plugin test .
 
-ci: typecheck validate test ## Run local CI checks
+ci: fmt-check lint typecheck validate test ## Run local CI checks
 	@printf "${GREEN}${BOLD}Local CI checks completed.${NC}\n"
 
 # =============================================================================

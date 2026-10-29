@@ -58,9 +58,10 @@ Claude Code already moves the messages: `SendMessage` and `ListAgents` let
 sessions on one machine talk. crosstalk adds the part you see:
 
 - **Incoming**: every peer delivery (`session.receive`, origins `peer` and
-  `peer-send-message`) is recorded under the sender's name, unchanged.
+  `peer-send-message`) is recorded under the sender's name, unchanged; a
+  teammate's (agent teams) or one for the session's own agents is not.
 - **Outgoing**: every `SendMessage` this session makes (`tool.call`) is
-  recorded under its recipient, unchanged.
+  recorded under its recipient, unchanged, but for a send to a teammate.
 - **The pane** (`/crosstalk`, again to close) opens on an **inbox**: one row
   a conversation (and each idle local session), most recent first, with its
   status, its name whole, its unread count, its time and its last message.
@@ -150,13 +151,15 @@ loaded as a mod.
 ## Develop
 
 Requires Claude Code (a build that carries function hooks), `bun` (for
-`tsc`) and `jq`.
+`tsc`, oxlint and oxfmt) and `jq`.
 
 ```bash
 make test       # claude plugin test .
 make typecheck  # tsc against types/
+make lint       # oxlint
+make fmt        # oxfmt, in place (make fmt-check to only check)
 make validate   # claude plugin validate
-make ci         # all three
+make ci         # fmt-check, lint, typecheck, validate, test
 make types      # regenerate types/ after a Claude Code update
 ```
 

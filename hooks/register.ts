@@ -1,4 +1,12 @@
-import type { EngineInterface, Register, Timer, ToolCallArgs, ToolCallResult, UiPane } from 'claude-code'
+import type {
+  EngineInterface,
+  Register,
+  Timer,
+  ToolCallArgs,
+  ToolCallResult,
+  UiOpenResult,
+  UiPane,
+} from 'claude-code'
 
 import * as Thread from './thread'
 import * as View from './view'
@@ -16,7 +24,10 @@ export const FOCUS_RETRY_MS = 150
 // have to have fallen back to the prompt, or the ask is refused.
 export const REFOCUS_MS = 400
 
-const PEER_ORIGINS = { kind: ['peer', 'peer-send-message'] } as const
+// A local session's delivery is `peer` (seen live on 2.1.312); 2.1.277 named
+// another session's SendMessage `peer-send-message`. Two members of the
+// origin union, which a kind array cannot span: one RegExp.
+const PEER_ORIGINS = { kind: /^peer(-send-message)?$/ }
 
 // An inbox row's key: the prefix, then the peer's name.
 const ROW_PREFIX = 'open:'
@@ -38,7 +49,7 @@ type Host = {
   after: (ms: number, fn: () => void) => Timer
   invalidate: () => void
   status: (text: string | undefined) => void
-  open: () => Promise<void>
+  open: () => Promise<UiOpenResult>
   close: () => Promise<void>
   focus: (key: string) => Promise<boolean>
   panes: () => Promise<readonly UiPane[]>
@@ -66,6 +77,16 @@ function refusalOf(result: ToolCallResult): string | undefined {
   }
 
   return undefined
+}
+
+/**
+ * Whether a SendMessage went to a teammate's mailbox, not to another session:
+ * its result carries `routing` (seen live on 2.1.312; typed `unknown`).
+ */
+function isTeamSend(result: ToolCallResult): boolean {
+  const record: unknown = result.result
+
+  return typeof record === 'object' && record !== null && 'routing' in record
 }
 
 /**
@@ -270,7 +291,8 @@ export const register: Register = on => {
   async function refreshPeers(): Promise<void> {
     const result = await host?.call({ tool: 'ListAgents' }).catch(() => undefined)
     const record: unknown = result?.result
-    const listing = typeof record === 'object' && record ? Reflect.get(record, 'listing') : undefined
+    const listing =
+      typeof record === 'object' && record ? Reflect.get(record, 'listing') : undefined
 
     if (typeof listing === 'string') {
       thread = Thread.withListing(thread, Thread.listingOf(listing))
@@ -289,7 +311,12 @@ export const register: Register = on => {
     replying = message
 
     const result = await host
-      .call({ tool: 'SendMessage', to: Thread.addressOf(thread, to), message, summary: 'crosstalk reply' })
+      .call({
+        tool: 'SendMessage',
+        to: Thread.addressOf(thread, to),
+        message,
+        summary: 'crosstalk reply',
+      })
       .catch((error: unknown) => ({ deny: String(error), isError: undefined }))
       .finally(() => {
         replying = undefined
@@ -305,7 +332,9 @@ export const register: Register = on => {
     }
 
     back = 0
-    await commit(Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }))
+    await commit(
+      Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }),
+    )
   }
 
   on('session.start', async ($, e, next) => {
@@ -374,20 +403,34 @@ export const register: Register = on => {
   })
 
   on('session.receive', { origin: PEER_ORIGINS }, async ($, e, next) => {
+    // A teammate writes through the agent-team mailbox, and a delivery with
+    // an agentId is for one of this session's agents: neither is a message
+    // between this session's conversation and another session.
+    if ('teammate' in e.origin || e.agentId !== undefined) {
+      return next(e)
+    }
+
     const { peer, text, address } = Thread.inboundOf(e.text)
     const known = Thread.withAlias(thread, address, peer)
 
     holdPlace(peer)
-    await commit(Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isReading(peer)))
+    await commit(
+      Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isReading(peer)),
+    )
 
     return next(e)
   })
 
   on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => {
     const result = await next(e)
-    const isSent = refusalOf(result) === undefined && e.message !== replying
+    const isSent = refusalOf(result) === undefined && !isTeamSend(result) && e.message !== replying
 
-    if (isSent && e.tool === 'SendMessage' && typeof e.to === 'string' && typeof e.message === 'string') {
+    if (
+      isSent &&
+      e.tool === 'SendMessage' &&
+      typeof e.to === 'string' &&
+      typeof e.message === 'string'
+    ) {
       holdPlace(Thread.peerOf(thread, e.to))
       await commit(
         Thread.record(thread, {
@@ -413,7 +456,8 @@ export const register: Register = on => {
       return { text: 'crosstalk closed' }
     }
 
-    await host.open()
+    const placed = await host.open()
+
     isOpen = true
     view = 'inbox'
     back = 0
@@ -427,11 +471,7 @@ export const register: Register = on => {
     refresh ??= host.every(REFRESH_MS, () => void refreshPeers())
     redraw()
 
-    const pane = (await host.panes()).find(p => p.id === PANE_ID)
-
-    return pane?.isPlaced === false
-      ? { text: 'crosstalk is open: widen the terminal to 110 columns to see it' }
-      : {}
+    return placed.isPlaced ? {} : { text: `crosstalk is open: ${placed.reason}` }
   })
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
