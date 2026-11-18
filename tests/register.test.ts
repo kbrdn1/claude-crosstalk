@@ -54,7 +54,26 @@ function world(
   const saves = { isFull: false }
   let version = 0
 
-  const clock = mock.clock(on)
+  // What the next `clock.now` waits for before it answers: mock.clock owns
+  // that hook, so its own is wrapped as it registers it.
+  const nowHold: { next?: Promise<void> } = {}
+  const holdingNow = (...args: unknown[]) => {
+    const hook = args.at(-1)
+
+    if (args[0] === 'clock.now' && typeof hook === 'function') {
+      args[args.length - 1] = async (...call: unknown[]) => {
+        const held = nowHold.next
+
+        nowHold.next = undefined
+        await held
+
+        return Reflect.apply(hook, undefined, call)
+      }
+    }
+
+    return Reflect.apply(on, undefined, args)
+  }
+  const clock = mock.clock(holdingNow as unknown as On)
   const missing = { deny: 'ENOENT: no such file or directory' }
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -191,6 +210,7 @@ function world(
     reads,
     writes,
     saves,
+    nowHold,
     // Herdr writing its outbox, as a new file each time.
     outbox: (value: unknown) =>
       files.set(OUTBOX, { text: JSON.stringify(value), mtimeMs: ++version }),
@@ -846,6 +866,59 @@ describe('herdr', () => {
     await w.clock.settle()
 
     expect(w.published().threads.api?.map(m => m.text)).toEqual(['one', 'two'])
+  })
+
+  test('a peer message landing while Herdr sends keeps what the send recorded', async ($, on) => {
+    const w = inHerdr(on)
+    let release = () => {}
+
+    await $.session.start(SESSION)
+    w.nowHold.next = new Promise(resolve => {
+      release = resolve
+    })
+
+    const receiving = $.session.receive(fromPeer('api', 'ping'))
+
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'from herdr' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent, 'Herdr sent while the delivery waited on the clock').toHaveLength(1)
+
+    release()
+    await receiving
+    await w.clock.settle()
+
+    expect(w.published().handled).toEqual({ h1: { status: 'sent', at: OUTBOX_MS } })
+    expect(
+      w
+        .published()
+        .threads.api?.map(m => m.text)
+        .sort(),
+    ).toEqual(['from herdr', 'ping'])
+  })
+
+  test("the model's send landing while Herdr sends keeps what the send recorded", async ($, on) => {
+    const w = inHerdr(on)
+    let release = () => {}
+
+    await $.session.start(SESSION)
+    w.nowHold.next = new Promise(resolve => {
+      release = resolve
+    })
+
+    const sending = $.tool.call({ tool: 'SendMessage', to: 'web', message: 'from the model' })
+
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'from herdr' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent, 'Herdr sent while the model send waited on the clock').toHaveLength(2)
+
+    release()
+    await sending
+    await w.clock.settle()
+
+    expect(w.published().handled).toEqual({ h1: { status: 'sent', at: OUTBOX_MS } })
+    expect(w.published().threads.web?.map(m => m.text)).toEqual(['from the model'])
   })
 
   test('nothing goes out unless its id was saved first', async ($, on) => {

@@ -616,12 +616,13 @@ export const register: Register = on => {
     }
 
     const { peer, text, address } = Thread.inboundOf(e.text)
+    // The time first: the thread is read after it, so a Herdr send that
+    // landed during the wait is not overwritten.
+    const at = await $.clock.now()
     const known = Thread.withAlias(thread, address, peer)
 
     holdPlace(peer)
-    await commit(
-      Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isReading(peer)),
-    )
+    await commit(Thread.record(known, { dir: 'in', peer, text, at }, isReading(peer)))
 
     return next(e)
   })
@@ -636,15 +637,12 @@ export const register: Register = on => {
       typeof e.to === 'string' &&
       typeof e.message === 'string'
     ) {
-      holdPlace(Thread.peerOf(thread, e.to))
-      await commit(
-        Thread.record(thread, {
-          dir: 'out',
-          peer: Thread.peerOf(thread, e.to),
-          text: e.message,
-          at: await $.clock.now(),
-        }),
-      )
+      // The time first, the thread after it (see session.receive).
+      const at = await $.clock.now()
+      const peer = Thread.peerOf(thread, e.to)
+
+      holdPlace(peer)
+      await commit(Thread.record(thread, { dir: 'out', peer, text: e.message, at }))
     }
 
     return result
