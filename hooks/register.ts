@@ -273,13 +273,17 @@ export const register: Register = on => {
   /**
    * The thread with a new message in it: drawn, and saved for the next start.
    */
-  async function commit(next: Thread.Thread): Promise<void> {
+  async function commit(next: Thread.Thread): Promise<boolean> {
     thread = next
     redraw()
-    await host
+
+    const isSaved = await host
       ?.now()
       .then(now => host?.save(Thread.toSaved(thread, now)))
-      .catch(() => undefined)
+      .then(() => true)
+      .catch(() => false)
+
+    return isSaved === true
   }
 
   /**
@@ -447,7 +451,12 @@ export const register: Register = on => {
       return
     }
 
-    await answer({ status: 'pending', at })
+    // Unsaved, a reload would not know the id and would send it again.
+    if (!(await answer({ status: 'pending', at }))) {
+      await answer({ status: 'refused', reason: Thread.UNSAVED, at })
+
+      return
+    }
 
     const failure = await send(to, message, id)
 

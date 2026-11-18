@@ -80,6 +80,9 @@ export const MAX_HANDLED = 200
 // Why an outbox entry left pending by a reload is not sent again.
 export const INTERRUPTED = 'interrupted by a reload before its result: it may have been sent'
 
+// Why an outbox entry whose id could not be saved first is not sent.
+export const UNSAVED = 'not sent: its id could not be saved first, so a reload could send it twice'
+
 /**
  * The session journal lines worth parsing: a peer delivery (its `origin`),
  * a SendMessage call, and a tool result routed to a teammate's mailbox. A

@@ -50,6 +50,8 @@ function world(
   const reads: { failing: number; held?: Promise<void> } = { failing: 0 }
   // What the next write waits for before it lands.
   const writes: { holdNext?: Promise<void> } = {}
+  // Whether the store refuses every save.
+  const saves = { isFull: false }
   let version = 0
 
   const clock = mock.clock(on)
@@ -118,6 +120,10 @@ function world(
   })
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
   on('store.set', ($, e) => {
+    if (saves.isFull) {
+      return { deny: 'the store is full' }
+    }
+
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
 
     return { value: undefined }
@@ -184,6 +190,7 @@ function world(
     mv,
     reads,
     writes,
+    saves,
     // Herdr writing its outbox, as a new file each time.
     outbox: (value: unknown) =>
       files.set(OUTBOX, { text: JSON.stringify(value), mtimeMs: ++version }),
@@ -839,6 +846,20 @@ describe('herdr', () => {
     await w.clock.settle()
 
     expect(w.published().threads.api?.map(m => m.text)).toEqual(['one', 'two'])
+  })
+
+  test('nothing goes out unless its id was saved first', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.saves.isFull = true
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'hi' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent).toEqual([])
+    expect(w.published().handled).toEqual({
+      h1: { status: 'refused', reason: Thread.UNSAVED, at: OUTBOX_MS },
+    })
   })
 
   test('an unchanged outbox is not read again', async ($, on) => {

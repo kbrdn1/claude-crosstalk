@@ -198,9 +198,11 @@ half of one.
   without it is taken by whichever session of the terminal reads it.
 - Each `send` entry goes out once per `id`, the way the pane's reply does:
   `SendMessage` to the peer's `address`, then the message in its thread.
-  The id is saved before the send, so a reload never sends it twice; one a
-  reload cut off mid-send comes back `sent` when its message made it into
-  the thread, else `refused` (it may have gone).
+  The id is saved before the send, so a reload never sends it twice (an id
+  that cannot be saved is refused, not sent); one a reload cut off mid-send
+  comes back `sent` when its message made it into the thread, else
+  `refused` (it may have gone).
+- `at` is Herdr's own: crosstalk times a message when it sends it.
 - `to` must be the `name` of one of the published `peers`, and `text` must
   say something: otherwise the entry is refused and nothing is sent. Nothing
   else in the file runs anything.
