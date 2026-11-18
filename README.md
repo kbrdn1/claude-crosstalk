@@ -217,7 +217,8 @@ half of one.
   it resolves, else its live name. A session id survives `--resume`; a name
   does not (a new suffix at each start). It resolves in Herdr only: at each
   `ListAgents`, crosstalk reads the other terminals' publications and maps
-  each listed name to the `session.id` that publishes it. When a name
+  each listed name to the `session.id` that publishes it (a UUID: a file
+  whose id is not one is ignored, as a test's fixture would be). When a name
   resolves to an id already known, its conversation joins that one, title
   and unread with it; a key can so change once, from a name to an id
   (follow it by `name`). Outside Herdr a conversation stays filed by name,

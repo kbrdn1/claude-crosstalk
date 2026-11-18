@@ -104,6 +104,10 @@ export const EMPTY: Thread = {
 // A session's name is its folder's and two hex digits of its own.
 const NAME_SUFFIX = /-[0-9a-f]{2}$/
 
+// A Claude Code session id: a UUID. Anything else in Herdr's folder was
+// written by hand (a test's fixture) and names no session.
+const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
+
 // ponytail: one flat cap for the whole session, per-peer caps if a chatty
 // peer ends up pushing the others' history out.
 export const MAX_ENTRIES = 200
@@ -416,8 +420,8 @@ function isFiled(thread: Thread, key: string): boolean {
 
 /**
  * What another terminal's publication says of its session: id, live name,
- * terminal, project. Undefined without a name to map, or for a file caught
- * mid-write.
+ * terminal, project. Undefined without a name to map, with an id that is no
+ * session id (a hand-written file), or for a file caught mid-write.
  */
 export function sessionOf(
   text: string,
@@ -433,7 +437,7 @@ export function sessionOf(
   const session = isRecord(value) && isRecord(value.session) ? value.session : {}
   const { id, name, terminal, project } = session
 
-  if (typeof id !== 'string' || typeof name !== 'string' || id === '' || name === '') {
+  if (typeof id !== 'string' || typeof name !== 'string' || !SESSION_ID.test(id) || name === '') {
     return undefined
   }
 

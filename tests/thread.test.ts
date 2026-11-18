@@ -255,22 +255,28 @@ describe('thread', () => {
   })
 
   test("another terminal's publication gives its session; its flow file, the topic", async () => {
+    const ID = '435240f6-183d-456f-84ce-af986698e725'
+
     expect(
       Thread.sessionOf(
         JSON.stringify({
           v: 2,
-          session: { id: 'S1', name: 'flow-1d', terminal: 't3', project: 'claude-flow' },
+          session: { id: ID, name: 'flow-1d', terminal: 't3', project: 'claude-flow' },
           peers: [],
         }),
       ),
-    ).toEqual({ id: 'S1', name: 'flow-1d', terminal: 't3', project: 'claude-flow' })
+    ).toEqual({ id: ID, name: 'flow-1d', terminal: 't3', project: 'claude-flow' })
     expect(
-      Thread.sessionOf(JSON.stringify({ v: 1, session: { id: 'S2', name: 'old' } })),
+      Thread.sessionOf(JSON.stringify({ v: 1, session: { id: ID, name: 'old' } })),
       'a v1 publication names its session too',
-    ).toEqual({ id: 'S2', name: 'old' })
+    ).toEqual({ id: ID, name: 'old' })
     expect(
-      Thread.sessionOf('{"v":2,"session":{"id":"S3"}}'),
+      Thread.sessionOf(`{"v":2,"session":{"id":"${ID}"}}`),
       'no name: nothing to map',
+    ).toBeUndefined()
+    expect(
+      Thread.sessionOf(JSON.stringify({ v: 2, session: { id: 'xtfix-session-2', name: 'api' } })),
+      'an id that is no session id: a hand-written file, not believed',
     ).toBeUndefined()
     expect(Thread.sessionOf('{"v":2,"session":'), 'caught mid-write').toBeUndefined()
 

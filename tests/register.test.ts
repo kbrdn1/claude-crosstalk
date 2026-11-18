@@ -1133,10 +1133,12 @@ describe('herdr', () => {
 })
 
 // The session another Herdr terminal (t3) publishes, listed here as `api`,
-// and its claude-flow file.
+// and its claude-flow file. Session ids are UUIDs, as Claude Code's are.
+const API_ID = '435240f6-183d-456f-84ce-af986698e725'
+const NEW_ID = '6fa2dabb-6acf-4bb4-ae9b-e668e0dfbbd8'
 const API_SESSION = {
   v: 2,
-  session: { id: 'S-api', name: 'api', terminal: 't3', project: 'api-repo' },
+  session: { id: API_ID, name: 'api', terminal: 't3', project: 'api-repo' },
   peers: [],
   threads: {},
   handled: {},
@@ -1158,16 +1160,16 @@ describe('names', () => {
     await w.clock.settle()
 
     expect(w.published().peers.find(peer => peer.name === 'api')).toMatchObject({
-      key: 'S-api',
-      sessionId: 'S-api',
+      key: API_ID,
+      sessionId: API_ID,
       title: 'api-repo · #61',
       project: 'api-repo',
       topic: '#61',
       live: true,
     })
-    expect(w.published().threads['S-api']?.map(m => m.text)).toEqual(['ready?'])
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['ready?'])
 
-    w.outbox({ v: 2, send: [{ id: 'h1', to: 'S-api', text: 'yes' }] })
+    w.outbox({ v: 2, send: [{ id: 'h1', to: API_ID, text: 'yes' }] })
     await w.clock.advance(OUTBOX_MS)
 
     expect(
@@ -1191,8 +1193,8 @@ describe('names', () => {
     await $.session.receive(fromPeer('api-1d', 'after'))
     await w.clock.settle()
 
-    expect(Object.keys(w.published().threads)).toEqual(['S-api'])
-    expect(w.published().threads['S-api']?.map(m => m.text)).toEqual(['before', 'after'])
+    expect(Object.keys(w.published().threads)).toEqual([API_ID])
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['before', 'after'])
   })
 
   test("other terminals' files are read again only once changed, never this one's", async ($, on) => {
@@ -1206,18 +1208,32 @@ describe('names', () => {
     expect(w.fsCalls).not.toContain(`read ${PUBLICATION}`)
   })
 
+  test('a hand-written file whose id is no session id is not believed', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.herdrFile('t-fixture.crosstalk.json', {
+      ...API_SESSION,
+      session: { ...API_SESSION.session, id: 'xtfix-session-2', terminal: 't-fixture' },
+    })
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(API_ID)
+  })
+
   test('when two terminals claim one name, the newest file says who it is', async ($, on) => {
     const w = inHerdr(on)
 
     w.herdrFile('t3.crosstalk.json', API_SESSION)
     w.herdrFile('t4.crosstalk.json', {
       ...API_SESSION,
-      session: { ...API_SESSION.session, id: 'S-new', terminal: 't4' },
+      session: { ...API_SESSION.session, id: NEW_ID, terminal: 't4' },
     })
     await $.session.start(SESSION)
     await w.clock.settle()
 
-    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe('S-new')
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(NEW_ID)
   })
 
   test('a title from Herdr is kept in the shared store and published; empty, it clears', async ($, on) => {
@@ -1264,9 +1280,9 @@ describe('names', () => {
     w.herdrFile('t3.crosstalk.json', API_SESSION)
     await w.clock.advance(REFRESH_MS)
 
-    expect(w.store.get('titles')).toEqual({ 'S-api': 'API backend' })
+    expect(w.store.get('titles')).toEqual({ [API_ID]: 'API backend' })
     expect(w.published().peers.find(peer => peer.name === 'api')).toMatchObject({
-      key: 'S-api',
+      key: API_ID,
       title: 'API backend',
     })
   })
