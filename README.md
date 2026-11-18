@@ -284,9 +284,11 @@ half of one.
   the status line, then count only what came in after it. Opening the
   conversation in the pane reads it too.
 - `title` gives a conversation a title by `key` (v2); an empty one clears
-  it. Titles are kept in the plugin's store by key, shared by every session,
-  across renames and restarts; `r` in the pane does the same. A v1 outbox
-  (no `title`, `to` and `read` by name) is still read.
+  it. An entry applies once, when it appears or changes in the outbox (a
+  rename made since, with `r` or from another session, stands), and Herdr
+  may drop it once the published `title` shows it. Titles are kept in the
+  plugin's store by key, shared by every session, across renames and
+  restarts. A v1 outbox (no `title`, `to` and `read` by name) is still read.
 
 Known limit: a session name is its folder's plus two hex digits, so names
 come back. A conversation still filed under a name (one that never
