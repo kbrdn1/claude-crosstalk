@@ -330,7 +330,7 @@ describe('thread', () => {
       thread = Thread.record(thread, { dir: 'out', peer, text: `to ${peer}`, at: 1 })
     }
 
-    const threads = Thread.herdrOf(thread, 's1', 0).threads
+    const threads = Thread.herdrOf(thread, { id: 's1' }, 0).threads
 
     expect(Object.keys(threads)).toEqual(['constructor', '__proto__', 'toString'])
     expect(Object.getOwnPropertyDescriptor(threads, '__proto__')?.value).toEqual([
@@ -345,10 +345,17 @@ describe('thread', () => {
     thread = Thread.record(thread, { dir: 'in', peer: 'constructor', text: 'b', at: 2 })
 
     expect(Thread.unreadCount(thread)).toBe(2)
-    expect(Thread.herdrOf(Thread.readUpTo(thread, 'constructor', 1), 's1', 0).peers).toEqual([
+    expect(
+      Thread.herdrOf(Thread.readUpTo(thread, 'constructor', 1), { id: 's1' }, 0).peers,
+    ).toEqual([
       {
+        key: 'constructor',
+        title: 'constructor',
         name: 'constructor',
         address: 'constructor',
+        project: 'constructor',
+        live: false,
+        lastMessageAt: 2,
         unread: 1,
         last: { dir: 'in', text: 'b', at: 2 },
       },
@@ -411,25 +418,70 @@ describe('thread', () => {
     thread = Thread.withHandled(thread, 'h2', { status: 'refused', reason: 'unknown peer', at: 4 })
     thread = Thread.withHandled(thread, 'h3', { status: 'pending', at: 5 })
 
-    expect(Thread.herdrOf(thread, 's1', 9)).toEqual({
-      v: 1,
-      session: { id: 's1', name: 'claude-98' },
+    const self = { id: 's1', terminal: 't9', cwd: '/work/api', project: 'api' }
+
+    expect(Thread.herdrOf(thread, self, 9)).toEqual({
+      v: 2,
+      session: { id: 's1', name: 'claude-98', terminal: 't9', cwd: '/work/api', project: 'api' },
       updatedAt: 9,
       peers: [
         {
+          key: 'api',
+          title: 'api',
           name: 'api',
           address: 'api',
+          project: 'api',
+          kind: 'interactive',
           status: 'idle',
+          live: true,
+          lastMessageAt: 3,
           unread: 1,
           last: { dir: 'out', text: 'yes', at: 3 },
         },
         {
+          key: 'gone',
+          title: 'gone',
           name: 'gone',
           address: 'uds:/9.sock',
+          project: 'gone',
+          live: false,
+          lastMessageAt: 1,
           unread: 1,
           last: { dir: 'in', text: 'bye', at: 1 },
         },
-        { name: 'web', address: 'web', status: 'busy', unread: 0 },
+        {
+          key: 'web',
+          title: 'web',
+          name: 'web',
+          address: 'web',
+          project: 'web',
+          kind: 'interactive',
+          status: 'busy',
+          live: true,
+          unread: 0,
+        },
+        {
+          key: 'laptop-bubble',
+          title: 'laptop-bubble',
+          name: 'laptop-bubble',
+          address: 'laptop-bubble',
+          project: 'laptop-bubble',
+          kind: 'remote',
+          status: 'offline',
+          live: true,
+          unread: 0,
+        },
+        {
+          key: 'ultrareview: HEAD',
+          title: 'ultrareview: HEAD',
+          name: 'ultrareview: HEAD',
+          address: 'ultrareview: HEAD',
+          project: 'ultrareview: HEAD',
+          kind: 'cloud',
+          status: 'idle',
+          live: true,
+          unread: 0,
+        },
       ],
       threads: {
         gone: [{ dir: 'in', text: 'bye', at: 1 }],
@@ -443,9 +495,45 @@ describe('thread', () => {
         h2: { status: 'refused', reason: 'unknown peer', at: 4 },
       },
     })
-    expect(Thread.herdrOf(Thread.EMPTY, 's1', 0).session, 'no name before a listing').toEqual({
-      id: 's1',
-    })
+    expect(
+      Thread.herdrOf(Thread.EMPTY, { id: 's1' }, 0).session,
+      'no name before a listing',
+    ).toEqual({ id: 's1' })
+  })
+
+  test("Herdr's view of a resolved peer: its session id, title, topic, last seen", async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'flow-1d', kind: 'interactive', status: 'idle' }] },
+      7,
+    )
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1aa', name: 'flow-1d', project: 'claude-flow', topic: '#61' },
+    ])
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1aa', text: 'on it', at: 8 })
+
+    const published = Thread.herdrOf(thread, { id: 's1' }, 9)
+
+    expect(published.peers).toEqual([
+      {
+        key: 'S1aa',
+        sessionId: 'S1aa',
+        title: 'claude-flow · #61',
+        name: 'flow-1d',
+        address: 'flow-1d',
+        project: 'claude-flow',
+        topic: '#61',
+        kind: 'interactive',
+        status: 'idle',
+        live: true,
+        lastSeenAt: 7,
+        lastMessageAt: 8,
+        unread: 0,
+        last: { dir: 'out', text: 'on it', at: 8 },
+      },
+    ])
+    expect(published.threads).toEqual({ S1aa: [{ dir: 'out', text: 'on it', at: 8 }] })
   })
 
   test("Herdr's outbox: its sends and read marks; anything else is none", async () => {
@@ -469,11 +557,20 @@ describe('thread', () => {
         { id: 'h2', to: '', text: '' },
       ],
       read: { api: 5 },
+      title: {},
     })
     expect(Thread.outboxOf('{"v":1}', 's1'), 'no session named: this one').toEqual({
       send: [],
       read: {},
+      title: {},
     })
+    expect(
+      Thread.outboxOf(
+        JSON.stringify({ v: 2, session: 's1', title: { S1: 'API backend', S2: '', S3: 7 } }),
+        's1',
+      ),
+      'v2 names conversations; an empty title clears one',
+    ).toEqual({ send: [], read: {}, title: { S1: 'API backend', S2: '' } })
     expect(
       Thread.outboxOf('{"v":1,"send":[{"id":"h1"', 's1'),
       'a half-written file',
@@ -482,10 +579,10 @@ describe('thread', () => {
 
   test('an outbox for another session, or of another version, asks nothing', async () => {
     const asks = { send: [{ id: 'h1', to: 'api', text: 'hi' }], read: { api: 5 } }
-    const none = { send: [], read: {} }
+    const none = { send: [], read: {}, title: {} }
 
     expect(Thread.outboxOf(JSON.stringify({ v: 1, session: 's0', ...asks }), 's1')).toEqual(none)
-    expect(Thread.outboxOf(JSON.stringify({ v: 2, session: 's1', ...asks }), 's1')).toEqual(none)
+    expect(Thread.outboxOf(JSON.stringify({ v: 3, session: 's1', ...asks }), 's1')).toEqual(none)
     expect(Thread.outboxOf(JSON.stringify({ session: 's1', ...asks }), 's1')).toEqual(none)
   })
 })

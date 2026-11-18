@@ -173,6 +173,9 @@ export const register: Register = on => {
   // Herdr leaves what to send. Undefined outside it, where nothing is written.
   let herdr: { file: string; outbox: string } | undefined
   let sessionId = ''
+  // This session as it publishes itself to Herdr: its id, terminal, folder
+  // and project.
+  let self: Thread.Self = { id: '' }
   // What was last published, its time left out: an unchanged view is not
   // written again. One write at a time, in order.
   let published = ''
@@ -330,7 +333,7 @@ export const register: Register = on => {
 
     publishing = publishing
       .then(async () => {
-        const view = Thread.herdrOf(thread, sessionId, await via.now())
+        const view = Thread.herdrOf(thread, self, await via.now())
         const body = JSON.stringify({ ...view, updatedAt: 0 })
 
         if (body === published) {
@@ -532,6 +535,14 @@ export const register: Register = on => {
       e.isInteractive && terminal && home
         ? { file: `${base}.crosstalk.json`, outbox: `${base}.crosstalk-outbox.json` }
         : undefined
+
+    if (herdr !== undefined && terminal) {
+      // The main working tree's root names the project, a worktree's too.
+      const root = (await $.session.repo().catch(() => null))?.root ?? e.cwd
+      const project = root.split(/[\\/]/).findLast(Boolean)
+
+      self = { id, terminal, cwd: e.cwd, ...(project === undefined ? {} : { project }) }
+    }
 
     host = {
       now: () => $.clock.now(),

@@ -496,7 +496,10 @@ export function conversationsOf(thread: Thread): Conversation[] {
   const rows = [...active, ...idle]
   const titles = titlesOf(
     thread,
-    rows.map(row => row.peer),
+    keysOf(
+      thread,
+      rows.map(row => row.peer),
+    ),
   )
 
   return rows.map(row => ({ ...row, title: titles[row.peer] ?? row.peer }))
@@ -770,20 +773,40 @@ export function readUpTo(thread: Thread, peer: string, at: number): Thread {
 export type HerdrMessage = { dir: Direction; text: string; at?: number; id?: string }
 
 /**
+ * One peer as Herdr reads it: its stable key, what to call it, where it
+ * stands, and its conversation's state.
+ */
+export type HerdrPeer = {
+  key: string
+  sessionId?: string
+  title: string
+  name: string
+  address: string
+  project: string
+  topic?: string
+  kind?: string
+  status?: string
+  live: boolean
+  lastSeenAt?: number
+  lastMessageAt?: number
+  unread: number
+  last?: HerdrMessage
+}
+
+/**
+ * This session as it publishes itself: its id, and where it runs.
+ */
+export type Self = { id: string; terminal?: string; cwd?: string; project?: string }
+
+/**
  * What crosstalk publishes for Herdr: the contract of the README's Herdr
  * section, version `v`.
  */
 export type Publication = {
-  v: 1
-  session: { id: string; name?: string }
+  v: 2
+  session: Self & { name?: string }
   updatedAt: number
-  peers: {
-    name: string
-    address: string
-    status?: string
-    unread: number
-    last?: HerdrMessage
-  }[]
+  peers: HerdrPeer[]
   threads: Record<string, HerdrMessage[]>
   handled: Record<string, Handled>
 }
@@ -793,11 +816,19 @@ function herdrMessageOf({ dir, text, at, id }: Entry): HerdrMessage {
 }
 
 /**
- * The publication for session `id`: every conversation as the inbox orders
- * it, each one's messages oldest first, and each outbox entry's result
- * (a pending one is not one yet).
+ * Every key worth a title, so twins are told apart the same way everywhere:
+ * each conversation's and each listed session's.
  */
-export function herdrOf(thread: Thread, id: string, updatedAt: number): Publication {
+function keysOf(thread: Thread, first: readonly string[]): string[] {
+  return [...new Set([...first, ...thread.peers.map(peer => keyOf(thread, peer.name))])]
+}
+
+/**
+ * The publication for session `self`: every conversation as the inbox orders
+ * it then every other listed session, each one's messages oldest first, and
+ * each outbox entry's result (a pending one is not one yet).
+ */
+export function herdrOf(thread: Thread, self: Self, updatedAt: number): Publication {
   // A Map, not an object: a peer may be named `constructor` or `__proto__`.
   const threads = new Map<string, HerdrMessage[]>()
 
@@ -805,17 +836,39 @@ export function herdrOf(thread: Thread, id: string, updatedAt: number): Publicat
     threads.set(entry.peer, [...(threads.get(entry.peer) ?? []), herdrMessageOf(entry)])
   }
 
-  return {
-    v: 1,
-    session: thread.self === undefined ? { id } : { id, name: thread.self },
-    updatedAt,
-    peers: conversationsOf(thread).map(({ peer, status, unread, last }) => ({
-      name: peer,
-      address: addressOf(thread, peer),
-      ...(status === undefined ? {} : { status }),
+  const conversations = new Map(conversationsOf(thread).map(c => [c.peer, c]))
+  const keys = keysOf(thread, [...conversations.keys()])
+  const titles = titlesOf(thread, keys)
+  const peers = keys.map((key): HerdrPeer => {
+    const { unread = 0, last } = conversations.get(key) ?? {}
+    const listed = thread.peers.find(peer => keyOf(thread, peer.name) === key)
+    const name = nameOfKey(thread, key)
+    const { project = name.replace(NAME_SUFFIX, ''), topic } = knownOf(thread, key)
+    const seen = Object.hasOwn(thread.seen, key) ? thread.seen[key] : undefined
+    const isSession = Object.hasOwn(thread.known, key) && key !== name
+
+    return {
+      key,
+      ...(isSession ? { sessionId: key } : {}),
+      title: titles[key] ?? name,
+      name,
+      address: addressOf(thread, key),
+      project,
+      ...(topic === undefined ? {} : { topic }),
+      ...(listed === undefined ? {} : { kind: kindOf(listed.kind), status: listed.status }),
+      live: listed !== undefined,
+      ...(seen === undefined ? {} : { lastSeenAt: seen }),
+      ...(last?.at === undefined ? {} : { lastMessageAt: last.at }),
       unread,
       ...(last === undefined ? {} : { last: { ...herdrMessageOf(last), id: undefined } }),
-    })),
+    }
+  })
+
+  return {
+    v: 2,
+    session: thread.self === undefined ? self : { ...self, name: thread.self },
+    updatedAt,
+    peers,
     threads: Object.fromEntries(threads),
     handled: Object.fromEntries(
       Object.entries(thread.handled).filter(([, result]) => result.status !== 'pending'),
@@ -824,15 +877,19 @@ export function herdrOf(thread: Thread, id: string, updatedAt: number): Publicat
 }
 
 /**
- * One message Herdr asks to send: `to` a conversation's name.
+ * One message Herdr asks to send: `to` a conversation's key or name.
  */
 export type Outgoing = { id: string; to: string; text: string }
 
 /**
- * What Herdr's outbox asks: messages to send, and each conversation read up
- * to a time.
+ * What Herdr's outbox asks: messages to send, each conversation read up to a
+ * time, and titles to give (an empty one clears).
  */
-export type Outbox = { send: Outgoing[]; read: Record<string, number> }
+export type Outbox = {
+  send: Outgoing[]
+  read: Record<string, number>
+  title: Record<string, string>
+}
 
 /**
  * What Herdr's outbox asks of session `session`, or undefined when its text
@@ -852,8 +909,10 @@ export function outboxOf(text: string, session: string): Outbox | undefined {
 
   const record = isRecord(value) ? value : {}
 
-  if (record.v !== 1 || (record.session !== undefined && record.session !== session)) {
-    return { send: [], read: {} }
+  const isVersion = record.v === 1 || record.v === 2
+
+  if (!isVersion || (record.session !== undefined && record.session !== session)) {
+    return { send: [], read: {}, title: {} }
   }
 
   const send = (Array.isArray(record.send) ? record.send : []).flatMap(entry =>
@@ -872,6 +931,11 @@ export function outboxOf(text: string, session: string): Outbox | undefined {
       (pair): pair is [string, number] => typeof pair[1] === 'number',
     ),
   )
+  const title = Object.fromEntries(
+    Object.entries(isRecord(record.title) ? record.title : {}).filter(
+      (pair): pair is [string, string] => typeof pair[1] === 'string',
+    ),
+  )
 
-  return { send, read }
+  return { send, read, title }
 }

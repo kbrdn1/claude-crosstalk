@@ -79,6 +79,10 @@ function world(
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.receive', ($, e) => ({ text: e.text }))
   on('session.id', () => ({ value: 's1' }))
+  // The main working tree's root, a worktree's too: its name is the project.
+  on('session.repo', () => ({
+    value: { root: '/home/me/Projects/api', remote: null, internal: false, name: null },
+  }))
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : env[e.name] }))
   on('fs.write', async ($, e) => {
     const held = writes.holdNext
@@ -965,8 +969,14 @@ describe('herdr', () => {
     expect(w.published().session, 'named by the listing taken at the start').toEqual({
       id: 's1',
       name: 'claude-98',
+      terminal: 't9',
+      cwd: '/work',
+      project: 'api',
     })
-    expect(w.published().peers.map(p => p.name)).toEqual(['api', 'web'])
+    expect(
+      w.published().peers.map(p => p.name),
+      'every listed session',
+    ).toEqual(['api', 'web', 'laptop-bubble', 'ultrareview: HEAD'])
 
     await w.clock.advance(1000)
     await $.session.receive(fromPeer('api', '**ready?**'))
@@ -976,9 +986,15 @@ describe('herdr', () => {
 
     expect(published.updatedAt).toBe(1000)
     expect(published.peers[0]).toEqual({
+      key: 'api',
+      title: 'api',
       name: 'api',
       address: 'api',
+      project: 'api',
+      kind: 'interactive',
       status: 'idle',
+      live: true,
+      lastMessageAt: 1000,
       unread: 1,
       last: { dir: 'in', text: '**ready?**', at: 1000 },
     })
