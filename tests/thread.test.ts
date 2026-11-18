@@ -179,6 +179,24 @@ describe('thread', () => {
 
     expect(Thread.addressOf(thread, 'S9')).toBe('api-1d')
     expect(Thread.addressOf(thread, 'S1'), 'nothing reaches it any more').toBe('S1')
+
+    // Its name listed again before any publication says whose it is.
+    const unresolved = Thread.withDirectory(Thread.withListing(thread, listed), [])
+
+    expect(Thread.addressOf(unresolved, 'S1'), 'nor the name a stranger lists').toBe('S1')
+  })
+
+  test('a peer renamed at its socket to an object member keeps when it was seen', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'old-00', kind: 'interactive', status: 'idle' }] },
+      5,
+    )
+
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'old-00')
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'constructor')
+
+    expect(thread.seen.constructor).toBe(5)
   })
 
   test('a conversation that resolves takes everything keyed by it to the session id', async () => {

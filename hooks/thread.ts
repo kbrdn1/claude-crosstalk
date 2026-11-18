@@ -279,7 +279,10 @@ function movedLocally(thread: Thread, from: string, to: string): Thread {
 
   return {
     ...thread,
-    seen: at === undefined ? seen : { ...seen, [to]: Math.max(at, seen[to] ?? 0) },
+    seen:
+      at === undefined
+        ? seen
+        : { ...seen, [to]: Math.max(at, Object.hasOwn(seen, to) ? (seen[to] ?? 0) : 0) },
     known: was === undefined ? known : { ...known, [to]: { ...was, ...knownOf(thread, to) } },
   }
 }
@@ -306,7 +309,9 @@ function liveNameOf(thread: Thread, key: string): string | undefined {
  */
 export function addressOf(thread: Thread, key: string): string {
   const { name } = knownOf(thread, key)
-  const lastName = name !== undefined && keyOf(thread, name) === name ? name : undefined
+  // Listed now under another key, resolved or not, the name is someone else's.
+  const lastName =
+    name !== undefined && !thread.peers.some(listed => listed.name === name) ? name : undefined
 
   return (
     liveNameOf(thread, key) ??

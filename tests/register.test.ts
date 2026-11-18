@@ -807,6 +807,17 @@ describe('register', () => {
     expect(await ui.find({ key: 'title' }), 'back to normal mode').toBeUndefined()
   })
 
+  test('a title half typed survives a redraw', async ($, on) => {
+    const w = world(on)
+    const ui = await renaming($, on, w)
+
+    await ui.input({ key: 'title', text: 'half', kind: 'change' })
+    await w.clock.advance(REFRESH_MS)
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'title' }))?.props.value).toBe('half')
+  })
+
   test('r starts from the title given, and says so when the store refuses one', async ($, on) => {
     const w = world(on, [], { titles: { api: 'Old' } })
     const ui = await renaming($, on, w)
@@ -1303,6 +1314,21 @@ describe('names', () => {
     })
     await $.session.start(SESSION)
     await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(API_ID)
+  })
+
+  test('a publication that could not be read is read again, though unchanged', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.reads.failing = 1
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe('api')
+
+    await w.clock.advance(REFRESH_MS)
 
     expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(API_ID)
   })

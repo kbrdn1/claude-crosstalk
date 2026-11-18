@@ -393,7 +393,14 @@ export const register: Register = on => {
         return hit.value as T | undefined
       }
 
-      const value = parse((await via.read(`${target.dir}/${name}`).catch(() => '')) ?? '')
+      const text = await via.read(`${target.dir}/${name}`).catch(() => undefined)
+
+      // Unread, it is not kept as read: the next listing tries again.
+      if (text === undefined) {
+        return undefined
+      }
+
+      const value = parse(text)
 
       directory.set(name, { stamp, value })
 
@@ -444,6 +451,8 @@ export const register: Register = on => {
 
     // One change at a time: two would each read the store, and the last to
     // write would undo the other.
+    // ponytail: in this session only; two sessions writing a title in the
+    // same instant still lose one. One store key per title if that bites.
     const run = titling.then(async () => {
       const via = host
 
