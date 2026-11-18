@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Herdr**: in a session that runs in a Herdr terminal (`HC_TERMINAL_ID`),
+  crosstalk publishes its conversations to
+  `~/.claude/cache/herdr/<terminal>.crosstalk.json` and sends the replies
+  Herdr writes to `<terminal>.crosstalk-outbox.json`, once per id, the way
+  the pane's reply field does; Herdr's read marks clear the unread count.
+  Outside Herdr nothing changes. The protocol is in the README's Herdr
+  section (#7).
+
 ## Past releases
 
 In reverse chronological order:

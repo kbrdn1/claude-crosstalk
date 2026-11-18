@@ -82,7 +82,11 @@ Where tests go:
     `{ as: 'api' }` carries them, without their times: hence the journal
     read.
   - A `SendMessage` nobody answers resolves `{ success: false }`, not an
-    error.
+    error. One the recipient holds for approval resolves `success: true`:
+    the hold comes later, as a `[Cross-session delivery notice]` naming the
+    send's `msg_id` (seen on 2.1.327; whether it reaches a hook is unknown).
+  - A plugin's `$.tool.call` of SendMessage from a `clock.every` closure
+    delivers, the envelope marked `from-plugin="crosstalk"` (2.1.327).
   - A pane takes the keys when opened with `focus` over an empty composer
     (`holdToasts` is not needed for it). Redrawing away the element that
     holds them drops them to the prompt, and the pane can ask them back
