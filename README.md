@@ -187,7 +187,9 @@ half of one.
       "project": "api",
       "live": false,
       "lastSeenAt": 1794970000000,
-      "unread": 0
+      "lastMessageAt": 1794969000000,
+      "unread": 0,
+      "last": { "dir": "out", "text": "done, thanks", "at": 1794969000000 }
     }
   ],
   "threads": {
