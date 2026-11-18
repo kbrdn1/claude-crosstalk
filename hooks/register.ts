@@ -1,5 +1,6 @@
 import type {
   EngineInterface,
+  FsEntry,
   FsStat,
   ProcessRunResult,
   Register,
@@ -40,6 +41,9 @@ const ROW_PREFIX = 'open:'
 // One store key a session: `thread:<session id>`.
 const STORE_PREFIX = 'thread:'
 
+// The titles the person gave, by key, shared by every session.
+const TITLES_KEY = 'titles'
+
 // ponytail: the 50 most recent sessions' threads stay in the store, the
 // rest go at a start; a size cap if a session's thread grows past use.
 export const MAX_SESSIONS = 50
@@ -60,9 +64,12 @@ type Host = {
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
+  titles: () => Promise<unknown>
+  saveTitles: (value: Record<string, string>) => Promise<void>
   read: (path: string) => Promise<string>
   write: (path: string, text: string) => Promise<void>
   stat: (path: string) => Promise<FsStat>
+  list: (path: string) => Promise<FsEntry[]>
   run: (argv: readonly string[]) => Promise<ProcessRunResult>
 }
 
@@ -159,6 +166,8 @@ export const register: Register = on => {
   let replying: string | undefined
   // What the person has typed in each conversation's reply field so far.
   const drafts = new Map<string, string>()
+  // The title being typed in rename mode: a redraw keeps it.
+  let titleDraft = ''
   // How many messages the thread is scrolled back from its newest one.
   let back = 0
   // Why the last reply did not go, shown in the pane until the next one.
@@ -166,13 +175,19 @@ export const register: Register = on => {
   // The inbox, or the conversation opened from it.
   let view: 'inbox' | 'thread' = 'inbox'
   // In a conversation, vim's modes: typing a reply, or moving with keys.
-  let mode: 'insert' | 'normal' = 'insert'
+  let mode: 'insert' | 'normal' | 'rename' = 'insert'
   // The key of our element holding the focus ring, as ui.focus last said.
   let ring: string | undefined
   // In Herdr: where this session publishes its conversations, and where
   // Herdr leaves what to send. Undefined outside it, where nothing is written.
-  let herdr: { file: string; outbox: string } | undefined
+  let herdr: { dir: string; file: string; outbox: string } | undefined
+  // Herdr's folder, each file read as it stood (mtime and size): another
+  // terminal's publication is read again only once it changed.
+  const directory = new Map<string, { stamp: string; value: unknown }>()
   let sessionId = ''
+  // This session as it publishes itself to Herdr: its id, terminal, folder
+  // and project.
+  let self: Thread.Self = { id: '' }
   // What was last published, its time left out: an unchanged view is not
   // written again. One write at a time, in order.
   let published = ''
@@ -180,6 +195,8 @@ export const register: Register = on => {
   // The outbox's mtime and size when it was last read whole.
   let outboxSeen = ''
   let isPolling = false
+  // The titles being stored, one change after the other.
+  let titling: Promise<unknown> = Promise.resolve()
   // The timer looking at the outbox.
   let looking: Timer | undefined
 
@@ -190,7 +207,7 @@ export const register: Register = on => {
   function onRing(key: string | undefined): void {
     ring = key
 
-    const now = key === 'reply' ? 'insert' : 'normal'
+    const now = key === 'reply' ? 'insert' : key === 'title' ? 'rename' : 'normal'
 
     if (view === 'thread' && key !== undefined && now !== mode) {
       mode = now
@@ -242,7 +259,7 @@ export const register: Register = on => {
    */
   function homeOf(): string {
     if (view === 'thread') {
-      return mode === 'insert' ? 'reply' : 'back'
+      return mode === 'insert' ? 'reply' : mode === 'rename' ? 'title' : 'back'
     }
 
     const peers = Thread.conversationsOf(thread).map(c => c.peer)
@@ -330,7 +347,7 @@ export const register: Register = on => {
 
     publishing = publishing
       .then(async () => {
-        const view = Thread.herdrOf(thread, sessionId, await via.now())
+        const view = Thread.herdrOf(thread, self, await via.now())
         const body = JSON.stringify({ ...view, updatedAt: 0 })
 
         if (body === published) {
@@ -349,14 +366,211 @@ export const register: Register = on => {
       .catch(() => undefined)
   }
 
+  /**
+   * The sessions the other Herdr terminals publish, each with its project
+   * and its claude-flow topic. A name two files claim is the newest file's
+   * (the other one's terminal is gone); this session's own file is skipped.
+   */
+  async function readDirectory(): Promise<Thread.Session[]> {
+    const via = host
+    const target = herdr
+
+    if (via === undefined || target === undefined) {
+      return []
+    }
+
+    const entries = await via.list(target.dir).catch(() => [])
+    const stamps = new Map(entries.map(entry => [entry.name, `${entry.mtimeMs}:${entry.size}`]))
+    const read = async <T>(name: string, parse: (text: string) => T): Promise<T | undefined> => {
+      const stamp = stamps.get(name)
+      const hit = directory.get(name)
+
+      if (stamp === undefined) {
+        return undefined
+      }
+
+      if (hit?.stamp === stamp) {
+        return hit.value as T | undefined
+      }
+
+      const text = await via.read(`${target.dir}/${name}`).catch(() => undefined)
+
+      // Unread, it is not kept as read: the next listing tries again.
+      if (text === undefined) {
+        return undefined
+      }
+
+      const value = parse(text)
+
+      directory.set(name, { stamp, value })
+
+      return value
+    }
+    const publications = entries
+      .filter(entry => entry.name.endsWith('.crosstalk.json'))
+      .filter(entry => `${target.dir}/${entry.name}` !== target.file)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    const sessions = new Map<string, Thread.Session>()
+
+    for (const entry of publications) {
+      const published = await read(entry.name, Thread.sessionOf)
+
+      if (published === undefined || published.id === sessionId || sessions.has(published.name)) {
+        continue
+      }
+
+      const { id, name, project } = published
+      // A v1 publication names no terminal: its file's name does.
+      const terminal = published.terminal ?? entry.name.replace(/\.crosstalk\.json$/, '')
+      const topic = await read(`${terminal}.flow.json`, Thread.topicOf)
+
+      sessions.set(name, {
+        id,
+        name,
+        ...(project === undefined ? {} : { project }),
+        ...(topic === undefined ? {} : { topic }),
+      })
+    }
+
+    for (const name of directory.keys()) {
+      if (!stamps.has(name)) directory.delete(name)
+    }
+
+    return [...sessions.values()]
+  }
+
+  /**
+   * Changes the shared titles by `changes` (key to title, an empty one
+   * clears), over what the store holds now: another session's titles stay.
+   */
+  function storeTitles(changes: Readonly<Record<string, string>>): Promise<boolean> {
+    // Nothing to change waits for nothing.
+    if (Object.keys(changes).length === 0) {
+      return Promise.resolve(true)
+    }
+
+    // One change at a time: two would each read the store, and the last to
+    // write would undo the other.
+    // ponytail: in this session only; two sessions writing a title in the
+    // same instant still lose one. One store key per title if that bites.
+    const run = titling.then(async () => {
+      const via = host
+
+      if (via === undefined) {
+        return true
+      }
+
+      // Titles that could not be read are not written over: every
+      // session's are in there.
+      const read = await via.titles().then(
+        value => ({ value }),
+        () => undefined,
+      )
+
+      if (read === undefined) {
+        return false
+      }
+
+      const stored = Thread.withTitles(Thread.EMPTY, read.value).titles
+      const titles = Object.fromEntries(
+        Object.entries({ ...stored, ...changes }).filter(([, title]) => title !== ''),
+      )
+      const isSaved = await via.saveTitles(titles).then(
+        () => true,
+        () => false,
+      )
+
+      if (isSaved) {
+        thread = Thread.withTitles(thread, titles)
+        redraw()
+      }
+
+      return isSaved
+    })
+
+    titling = run.catch(() => false)
+
+    return run
+  }
+
+  /**
+   * Every key the publication lists: each conversation's, each listed
+   * session's.
+   */
+  function publishedKeys(): Set<string> {
+    return new Set([
+      ...Thread.conversationsOf(thread).map(c => c.peer),
+      ...thread.peers.map(listed => Thread.keyOf(thread, listed.name)),
+    ])
+  }
+
+  /**
+   * What turns `before`'s titles into `after`'s: each key set or cleared.
+   */
+  function titleChanges(
+    before: Readonly<Record<string, string>>,
+    after: Readonly<Record<string, string>>,
+  ): Record<string, string> {
+    return Object.fromEntries([
+      ...Object.keys(before)
+        .filter(key => !Object.hasOwn(after, key))
+        .map(key => [key, '']),
+      ...Object.entries(after).filter(
+        ([key, title]) => !Object.hasOwn(before, key) || before[key] !== title,
+      ),
+    ])
+  }
+
   async function refreshPeers(): Promise<void> {
     const result = await host?.call({ tool: 'ListAgents' }).catch(() => undefined)
     const record: unknown = result?.result
     const listing =
       typeof record === 'object' && record ? Reflect.get(record, 'listing') : undefined
 
-    if (typeof listing === 'string') {
-      thread = Thread.withListing(thread, Thread.listingOf(listing))
+    if (typeof listing !== 'string' || host === undefined) {
+      return
+    }
+
+    const at = await host.now()
+    const sessions = herdr === undefined ? undefined : await readDirectory()
+    // Titles another session gave since; unreadable, the ones known stay.
+    const stored = await host.titles().catch(() => undefined)
+    const merged = (base: Thread.Thread, titles: unknown) => {
+      const withTitles = titles === undefined ? base : Thread.withTitles(base, titles)
+      const listed = Thread.withListing(withTitles, Thread.listingOf(listing), at)
+
+      return {
+        listed,
+        next: sessions === undefined ? listed : Thread.withDirectory(listed, sessions),
+      }
+    }
+    const before = merged(thread, stored)
+    const changes = titleChanges(before.listed.titles, before.next.titles)
+    // A title that moved with its conversation moves in the store too.
+    const isMoved = Object.keys(changes).length > 0 && (await storeTitles(changes))
+    // The thread read after every wait: nothing that landed meanwhile is lost.
+    const { listed, next } = merged(thread, isMoved ? undefined : stored)
+
+    // The draft typed under a name follows its conversation to the id.
+    for (const { id, name } of sessions ?? []) {
+      const draft = drafts.get(name)
+
+      if (draft !== undefined && Thread.keyOf(next, name) === id) {
+        drafts.delete(name)
+
+        if (!drafts.has(id)) drafts.set(id, draft)
+      }
+    }
+
+    const listedNow = new Set(next.peers.map(peer => Thread.keyOf(next, peer.name)))
+    const isGone = thread.peers.some(peer => !listedNow.has(Thread.keyOf(thread, peer.name)))
+
+    if (next.entries !== listed.entries || isGone) {
+      // A conversation moved to its session id, or a session left (when it
+      // was last seen): kept for the next start.
+      await commit(next)
+    } else {
+      thread = next
       redraw()
     }
   }
@@ -440,8 +654,14 @@ export const register: Register = on => {
 
     const at = await host.now()
     const message = text.trim()
-    const isKnown = Thread.conversationsOf(thread).some(c => c.peer === to)
-    const refusal = !isKnown ? `unknown peer: ${to}` : message === '' ? 'empty message' : undefined
+    // `to` is a key or a live name of a published peer.
+    const keys = publishedKeys()
+    const key = keys.has(to) ? to : Thread.keyOf(thread, to)
+    const refusal = !keys.has(key)
+      ? `unknown peer: ${to}`
+      : message === ''
+        ? 'empty message'
+        : undefined
     const answer = (result: Thread.Handled) =>
       commit(Thread.withHandled(thread, id, result, listed))
 
@@ -458,7 +678,7 @@ export const register: Register = on => {
       return
     }
 
-    const failure = await send(to, message, id)
+    const failure = await send(key, message, id)
 
     await answer(
       failure === undefined ? { status: 'sent', at } : { status: 'refused', reason: failure, at },
@@ -498,13 +718,35 @@ export const register: Register = on => {
       }
 
       const read = Object.entries(outbox.read).reduce(
-        (next, [peer, at]) => Thread.readUpTo(next, peer, at),
+        (next, [peer, at]) => Thread.readUpTo(next, Thread.keyOf(next, peer), at),
         thread,
       )
 
       if (read !== thread) {
         thread = read
         redraw()
+      }
+
+      // The titles Herdr gives, by key or live name of a published peer: each
+      // once, when it appears or changes in the outbox (a rename made since,
+      // here or elsewhere, stands). Not stored, the outbox is read again.
+      const keys = publishedKeys()
+      // An entry Herdr took out is forgotten: given again, it applies again.
+      const kept = Object.fromEntries(
+        Object.entries(thread.fromOutbox).filter(([raw]) => Object.hasOwn(outbox.title, raw)),
+      )
+      const fresh = Object.entries(outbox.title)
+        .filter(([raw, title]) => !Object.hasOwn(kept, raw) || kept[raw] !== title)
+        .filter(([raw]) => keys.has(Thread.keyOf(thread, raw)))
+      const isTitled = await storeTitles(
+        Object.fromEntries(fresh.map(([raw, title]) => [Thread.keyOf(thread, raw), title.trim()])),
+      )
+      const fromOutbox = { ...kept, ...Object.fromEntries(fresh) }
+
+      if (!isTitled) {
+        outboxSeen = ''
+      } else if (JSON.stringify(fromOutbox) !== JSON.stringify(thread.fromOutbox)) {
+        await commit({ ...thread, fromOutbox })
       }
 
       const listed = outbox.send.map(entry => entry.id)
@@ -530,8 +772,20 @@ export const register: Register = on => {
     sessionId = id
     herdr =
       e.isInteractive && terminal && home
-        ? { file: `${base}.crosstalk.json`, outbox: `${base}.crosstalk-outbox.json` }
+        ? {
+            dir: `${home}/.claude/cache/herdr`,
+            file: `${base}.crosstalk.json`,
+            outbox: `${base}.crosstalk-outbox.json`,
+          }
         : undefined
+
+    if (herdr !== undefined && terminal) {
+      // The main working tree's root names the project, a worktree's too.
+      const root = (await $.session.repo().catch(() => null))?.root ?? e.cwd
+      const project = root.split(/[\\/]/).findLast(Boolean)
+
+      self = { id, terminal, cwd: e.cwd, ...(project === undefined ? {} : { project }) }
+    }
 
     host = {
       now: () => $.clock.now(),
@@ -558,9 +812,12 @@ export const register: Register = on => {
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
+      titles: () => $.store.get(TITLES_KEY),
+      saveTitles: value => $.store.set(TITLES_KEY, value),
       read: path => $.fs.read(path),
       write: (path, text) => $.fs.write(path, text),
       stat: path => $.fs.stat(path),
+      list: path => $.fs.list(path),
       run: argv => $.process.run(argv),
     }
 
@@ -585,6 +842,11 @@ export const register: Register = on => {
 
       redraw()
     }
+
+    // The titles every session shares.
+    const titles = await host.titles().catch(() => undefined)
+
+    thread = Thread.withTitles(thread, titles)
 
     await prune($).catch(() => undefined)
 
@@ -615,14 +877,20 @@ export const register: Register = on => {
       return next(e)
     }
 
-    const { peer, text, address } = Thread.inboundOf(e.text)
+    const { peer: name, text, address } = Thread.inboundOf(e.text)
     // The time first: the thread is read after it, so a Herdr send that
     // landed during the wait is not overwritten.
     const at = await $.clock.now()
+    // Filed under the sender's session id when Herdr's directory knows it.
+    const peer = Thread.senderOf(thread, name, address)
     const known = Thread.withAlias(thread, address, peer)
+    // A session renamed at the same socket takes its title along: in the
+    // store too, or the next read would put the old one back.
+    const moved = titleChanges(thread.titles, known.titles)
 
     holdPlace(peer)
     await commit(Thread.record(known, { dir: 'in', peer, text, at }, isReading(peer)))
+    await storeTitles(moved)
 
     return next(e)
   })
@@ -678,11 +946,11 @@ export const register: Register = on => {
   })
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
-    // The person's esc in a conversation leaves the reply field for normal
-    // mode, then goes back to the inbox, as vim and a messaging app would;
-    // /crosstalk and q (the plugin's close) still close.
+    // The person's esc in a conversation leaves the reply field (or the title
+    // being typed) for normal mode, then goes back to the inbox, as vim and a
+    // messaging app would; /crosstalk and q (the plugin's close) still close.
     if (e.origin.kind === 'person' && view === 'thread') {
-      if (mode === 'insert') {
+      if (mode === 'insert' || mode === 'rename') {
         mode = 'normal'
         host?.invalidate()
         refocus('back')
@@ -788,6 +1056,41 @@ export const register: Register = on => {
           drafts.delete(thread.selected ?? '')
           notice = undefined
           void reply(text)
+        },
+        // The legend that held the keys goes with the mode: they are asked
+        // back once the title field is drawn, as on a view switch.
+        onRename: () => {
+          const key = thread.selected ?? ''
+
+          mode = 'rename'
+          titleDraft = Object.hasOwn(thread.titles, key) ? (thread.titles[key] ?? '') : ''
+          host?.invalidate()
+          refocus('title')
+        },
+        titleDraft,
+        onTitleInput: text => {
+          titleDraft = text
+          host?.invalidate()
+        },
+        onTitle: title => {
+          const key = thread.selected
+
+          mode = 'normal'
+          titleDraft = ''
+          host?.invalidate()
+          refocus('back')
+
+          if (key === undefined) {
+            return
+          }
+
+          void storeTitles({ [key]: title.trim() }).then(isStored => {
+            // The open pane holds toasts back: the reason goes in the pane.
+            if (!isStored) {
+              notice = 'title not kept: the store refused it'
+              host?.invalidate()
+            }
+          })
         },
       },
       thread,

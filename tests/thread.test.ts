@@ -146,6 +146,292 @@ describe('thread', () => {
     expect(thread.entries[0]?.text).toBe('5')
   })
 
+  test("a name Herdr's directory resolves files its conversation under the session id", async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      self: 'me-00',
+      peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }],
+    })
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1', name: 'api-1d', project: 'api', topic: '#61' },
+      { id: 'S2', name: 'gone-00' },
+      { id: 'S0', name: 'me-00' },
+    ])
+
+    expect(Thread.keyOf(thread, 'api-1d')).toBe('S1')
+    expect(Thread.keyOf(thread, 'gone-00'), 'a name nobody lists maps to nothing').toBe('gone-00')
+    expect(Thread.keyOf(thread, 'me-00'), 'nor this session').toBe('me-00')
+    expect(Thread.peerOf(thread, 'api-1d [ab12cd]')).toBe('S1')
+    expect(Thread.addressOf(thread, 'S1'), 'a reply goes to its live name').toBe('api-1d')
+  })
+
+  test('a reply to a gone session never goes to whoever holds its name now', async () => {
+    const listed = { peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }] }
+    let thread = Thread.withDirectory(Thread.withListing(Thread.EMPTY, listed), [
+      { id: 'S1', name: 'api-1d' },
+    ])
+
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1', text: 'x', at: 1 })
+    // S1 is gone; a new session S9 got its name.
+    thread = Thread.withDirectory(Thread.withListing(thread, listed), [
+      { id: 'S9', name: 'api-1d' },
+    ])
+
+    expect(Thread.addressOf(thread, 'S9')).toBe('api-1d')
+    expect(Thread.addressOf(thread, 'S1'), 'nothing reaches it any more').toBe('S1')
+
+    // Its name listed again before any publication says whose it is.
+    const unresolved = Thread.withDirectory(Thread.withListing(thread, listed), [])
+
+    expect(Thread.addressOf(unresolved, 'S1'), 'nor the name a stranger lists').toBe('S1')
+  })
+
+  test('a peer renamed at its socket to an object member keeps when it was seen', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'old-00', kind: 'interactive', status: 'idle' }] },
+      5,
+    )
+
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'old-00')
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'constructor')
+
+    expect(thread.seen.constructor).toBe(5)
+  })
+
+  test('a conversation that resolves takes everything keyed by it to the session id', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'api-fd', kind: 'interactive', status: 'idle' }] },
+      5,
+    )
+
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'api-fd')
+    thread = Thread.record(thread, { dir: 'in', peer: 'api-fd', text: 'a', at: 1 })
+    thread = Thread.record(thread, { dir: 'in', peer: 'api-fd', text: 'b', at: 2 })
+    thread = Thread.readUpTo(thread, 'api-fd', 1)
+    thread = Thread.withTitle(thread, 'api-fd', 'API backend')
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-fd', project: 'api' }])
+
+    expect(thread.entries.map(e => e.peer)).toEqual(['S1', 'S1'])
+    expect(thread.unread, 'the read mark kept: one unread, not two').toEqual({ S1: 1 })
+    expect(thread.titles).toEqual({ S1: 'API backend' })
+    expect(thread.seen).toEqual({ S1: 5 })
+    expect(thread.selected).toBe('S1')
+    expect(Thread.peerOf(thread, 'uds:/1.sock')).toBe('S1')
+
+    // The session restarts under a new name: same id, same conversation.
+    thread = Thread.withListing(
+      thread,
+      { peers: [{ name: 'api-1d', kind: 'interactive', status: 'busy' }] },
+      9,
+    )
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-1d', project: 'api' }])
+
+    expect(Thread.keyOf(thread, 'api-1d')).toBe('S1')
+    expect(Thread.keyOf(thread, 'api-fd'), 'its old name maps to nothing now').toBe('api-fd')
+    expect(thread.seen).toEqual({ S1: 9 })
+    expect(Thread.conversationsOf(thread).map(c => [c.peer, c.status])).toEqual([['S1', 'busy']])
+  })
+
+  test("a session id's own title wins over the one its old name carried", async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      peers: [{ name: 'api-fd', kind: 'interactive', status: 'idle' }],
+    })
+
+    thread = Thread.record(thread, { dir: 'in', peer: 'api-fd', text: 'hi', at: 1 })
+    thread = Thread.withTitle(thread, 'api-fd', 'old')
+    thread = Thread.withTitle(thread, 'S1', 'given')
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-fd' }])
+
+    expect(thread.titles).toEqual({ S1: 'given' })
+    expect(Thread.withTitle(thread, 'S1', '  ').titles, 'an empty title clears it').toEqual({})
+  })
+
+  test('a title: the given one, else project and topic, else project, else the name', async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      peers: [
+        { name: 'flow-1d', kind: 'interactive', status: 'idle' },
+        { name: 'web-2a', kind: 'interactive', status: 'idle' },
+        { name: 'web-3b', kind: 'interactive', status: 'idle' },
+        { name: 'app-4c', kind: 'interactive', status: 'idle' },
+        { name: 'app-5d', kind: 'interactive', status: 'idle' },
+        { name: 'Commande chmod 600', kind: 'Remote Control', status: 'offline' },
+      ],
+    })
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1aa', name: 'flow-1d', project: 'claude-flow', topic: '#61' },
+      { id: 'S2bb', name: 'web-2a', project: 'web' },
+      { id: 'S3cc', name: 'web-3b', project: 'web' },
+    ])
+    thread = Thread.withTitle(thread, 'S3cc', 'the other web')
+
+    expect(
+      Thread.titlesOf(thread, ['S1aa', 'S2bb', 'S3cc', 'app-4c', 'app-5d', 'Commande chmod 600']),
+    ).toEqual({
+      S1aa: 'claude-flow · #61',
+      S2bb: 'web',
+      S3cc: 'the other web',
+      'app-4c': 'app-4c',
+      'app-5d': 'app-5d',
+      'Commande chmod 600': 'Commande chmod 600',
+    })
+
+    const twins = Thread.withTitle(thread, 'S3cc', '')
+
+    expect(Thread.titlesOf(twins, ['S2bb', 'S3cc']), 'one project, no topic: by id').toEqual({
+      S2bb: 'web · S2bb',
+      S3cc: 'web · S3cc',
+    })
+    expect(Thread.titlesOf(thread, ['app-4c']), 'alone, a name loses its suffix').toEqual({
+      'app-4c': 'app',
+    })
+  })
+
+  test("another terminal's publication gives its session; its flow file, the topic", async () => {
+    const ID = '435240f6-183d-456f-84ce-af986698e725'
+
+    expect(
+      Thread.sessionOf(
+        JSON.stringify({
+          v: 2,
+          session: { id: ID, name: 'flow-1d', terminal: 't3', project: 'claude-flow' },
+          peers: [],
+        }),
+      ),
+    ).toEqual({ id: ID, name: 'flow-1d', terminal: 't3', project: 'claude-flow' })
+    expect(
+      Thread.sessionOf(JSON.stringify({ v: 1, session: { id: ID, name: 'old' } })),
+      'a v1 publication names its session too',
+    ).toEqual({ id: ID, name: 'old' })
+    expect(
+      Thread.sessionOf(`{"v":2,"session":{"id":"${ID}"}}`),
+      'no name: nothing to map',
+    ).toBeUndefined()
+    expect(
+      Thread.sessionOf(JSON.stringify({ v: 2, session: { id: 'xtfix-session-2', name: 'api' } })),
+      'an id that is no session id: a hand-written file, not believed',
+    ).toBeUndefined()
+    expect(Thread.sessionOf('{"v":2,"session":'), 'caught mid-write').toBeUndefined()
+
+    const flow = (steps: unknown[]) => JSON.stringify({ v: 1, workflow: 'me:x', steps })
+
+    expect(
+      Thread.topicOf(
+        flow([
+          { id: 'issue', label: 'issue #61', state: 'done' },
+          { id: 'branch', label: 'branch feat/#61-x', state: 'done' },
+        ]),
+      ),
+    ).toBe('#61')
+    expect(Thread.topicOf(flow([{ id: 'branch', label: 'branch fix/#9-y' }]))).toBe('fix/#9-y')
+    expect(Thread.topicOf(flow([]))).toBeUndefined()
+    expect(
+      Thread.topicOf(
+        flow([
+          { id: 'issue', label: 'issue', state: 'pending' },
+          { id: 'branch', label: 'branch feat/x', state: 'done' },
+        ]),
+      ),
+      'a step not filled in yet says nothing',
+    ).toBe('feat/x')
+    expect(Thread.topicOf(flow([{ id: 'branch', label: 'branch', state: 'pending' }]))).toBe(
+      undefined,
+    )
+    expect(Thread.topicOf('not json')).toBeUndefined()
+  })
+
+  test('a delivery from a name not resolved yet stays with the session id its socket had', async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }],
+    })
+
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-1d' }])
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'S1')
+
+    // A start whose listing failed: no name resolves.
+    const fresh = Thread.withDirectory({ ...thread, peers: [] }, [])
+
+    expect(Thread.senderOf(fresh, 'api-1d', 'uds:/1.sock')).toBe('S1')
+    expect(Thread.senderOf(fresh, 'api-1d', 'uds:/2.sock'), 'another socket: the name').toBe(
+      'api-1d',
+    )
+    expect(Thread.senderOf(thread, 'api-1d', undefined), 'resolved: the id').toBe('S1')
+    expect(
+      Thread.senderOf(
+        Thread.withAlias(Thread.EMPTY, 'uds:/3.sock', 'old-00'),
+        'new-00',
+        'uds:/3.sock',
+      ),
+      'a socket aliased to a name: the name, renamed as before',
+    ).toBe('new-00')
+  })
+
+  test("project is what a publication says or a name's suffix gives, never made up", async () => {
+    const thread = Thread.withListing(Thread.EMPTY, {
+      peers: [
+        { name: 'flow-1d', kind: 'interactive', status: 'idle' },
+        { name: 'laptop-bubble', kind: 'Remote Control', status: 'offline' },
+      ],
+    })
+    const peers = Thread.herdrOf(thread, { id: 's1' }, 0).peers
+
+    expect(peers.map(peer => peer.project)).toEqual(['flow', undefined])
+    expect(Thread.titlesOf(thread, ['laptop-bubble'])).toEqual({ 'laptop-bubble': 'laptop-bubble' })
+  })
+
+  test("ListAgents' kinds as Herdr reads them", async () => {
+    expect(['interactive', 'Remote Control', 'cloud', 'bg'].map(Thread.kindOf)).toEqual([
+      'interactive',
+      'remote',
+      'cloud',
+      'background',
+    ])
+  })
+
+  test('what is saved of peers is bounded: those talked to, and those listed now', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      {
+        peers: [
+          { name: 'a-1d', kind: 'interactive', status: 'idle' },
+          { name: 'b-2e', kind: 'interactive', status: 'idle' },
+        ],
+      },
+      1,
+    )
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1', name: 'a-1d' },
+      { id: 'S2', name: 'b-2e' },
+    ])
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1', text: 'x', at: 2 })
+
+    const saved = Thread.toSaved(Thread.withListing(thread, { peers: [] }, 3), 4)
+
+    expect(Object.keys(saved.known ?? {})).toEqual(['S1'])
+    expect(Object.keys(saved.seen ?? {})).toEqual(['S1'])
+  })
+
+  test('what is known of a peer and when it was seen are saved; the name map is not', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }] },
+      7,
+    )
+
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-1d', project: 'api' }])
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1', text: 'x', at: 8 })
+
+    const back = Thread.fromSaved(JSON.parse(JSON.stringify(Thread.toSaved(thread, 9))))
+
+    expect(back?.known).toEqual({ S1: { name: 'api-1d', project: 'api' } })
+    expect(back?.seen).toEqual({ S1: 7 })
+    expect(back?.ids).toEqual({})
+    expect(back?.titles, 'titles live in the shared store').toEqual({})
+  })
+
   test('read up to a time: only what came in after it stays unread', async () => {
     let thread = Thread.EMPTY
 
@@ -195,7 +481,7 @@ describe('thread', () => {
       thread = Thread.record(thread, { dir: 'out', peer, text: `to ${peer}`, at: 1 })
     }
 
-    const threads = Thread.herdrOf(thread, 's1', 0).threads
+    const threads = Thread.herdrOf(thread, { id: 's1' }, 0).threads
 
     expect(Object.keys(threads)).toEqual(['constructor', '__proto__', 'toString'])
     expect(Object.getOwnPropertyDescriptor(threads, '__proto__')?.value).toEqual([
@@ -210,10 +496,16 @@ describe('thread', () => {
     thread = Thread.record(thread, { dir: 'in', peer: 'constructor', text: 'b', at: 2 })
 
     expect(Thread.unreadCount(thread)).toBe(2)
-    expect(Thread.herdrOf(Thread.readUpTo(thread, 'constructor', 1), 's1', 0).peers).toEqual([
+    expect(
+      Thread.herdrOf(Thread.readUpTo(thread, 'constructor', 1), { id: 's1' }, 0).peers,
+    ).toEqual([
       {
+        key: 'constructor',
+        title: 'constructor',
         name: 'constructor',
         address: 'constructor',
+        live: false,
+        lastMessageAt: 2,
         unread: 1,
         last: { dir: 'in', text: 'b', at: 2 },
       },
@@ -276,25 +568,65 @@ describe('thread', () => {
     thread = Thread.withHandled(thread, 'h2', { status: 'refused', reason: 'unknown peer', at: 4 })
     thread = Thread.withHandled(thread, 'h3', { status: 'pending', at: 5 })
 
-    expect(Thread.herdrOf(thread, 's1', 9)).toEqual({
-      v: 1,
-      session: { id: 's1', name: 'claude-98' },
+    const self = { id: 's1', terminal: 't9', cwd: '/work/api', project: 'api' }
+
+    expect(Thread.herdrOf(thread, self, 9)).toEqual({
+      v: 2,
+      session: { id: 's1', name: 'claude-98', terminal: 't9', cwd: '/work/api', project: 'api' },
       updatedAt: 9,
       peers: [
         {
+          key: 'api',
+          title: 'api',
           name: 'api',
           address: 'api',
+          kind: 'interactive',
           status: 'idle',
+          live: true,
+          lastMessageAt: 3,
           unread: 1,
           last: { dir: 'out', text: 'yes', at: 3 },
         },
         {
+          key: 'gone',
+          title: 'gone',
           name: 'gone',
           address: 'uds:/9.sock',
+          live: false,
+          lastMessageAt: 1,
           unread: 1,
           last: { dir: 'in', text: 'bye', at: 1 },
         },
-        { name: 'web', address: 'web', status: 'busy', unread: 0 },
+        {
+          key: 'web',
+          title: 'web',
+          name: 'web',
+          address: 'web',
+          kind: 'interactive',
+          status: 'busy',
+          live: true,
+          unread: 0,
+        },
+        {
+          key: 'laptop-bubble',
+          title: 'laptop-bubble',
+          name: 'laptop-bubble',
+          address: 'laptop-bubble',
+          kind: 'remote',
+          status: 'offline',
+          live: true,
+          unread: 0,
+        },
+        {
+          key: 'ultrareview: HEAD',
+          title: 'ultrareview: HEAD',
+          name: 'ultrareview: HEAD',
+          address: 'ultrareview: HEAD',
+          kind: 'cloud',
+          status: 'idle',
+          live: true,
+          unread: 0,
+        },
       ],
       threads: {
         gone: [{ dir: 'in', text: 'bye', at: 1 }],
@@ -308,9 +640,51 @@ describe('thread', () => {
         h2: { status: 'refused', reason: 'unknown peer', at: 4 },
       },
     })
-    expect(Thread.herdrOf(Thread.EMPTY, 's1', 0).session, 'no name before a listing').toEqual({
-      id: 's1',
-    })
+    expect(
+      Thread.herdrOf(Thread.EMPTY, { id: 's1' }, 0).session,
+      'no name before a listing',
+    ).toEqual({ id: 's1' })
+  })
+
+  test("Herdr's view of a resolved peer: its session id, title, topic, last seen", async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'flow-1d', kind: 'interactive', status: 'idle' }] },
+      7,
+    )
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1aa', name: 'flow-1d', project: 'claude-flow', topic: '#61' },
+    ])
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1aa', text: 'on it', at: 8 })
+
+    const published = Thread.herdrOf(thread, { id: 's1' }, 9)
+
+    expect(published.peers).toEqual([
+      {
+        key: 'S1aa',
+        sessionId: 'S1aa',
+        title: 'claude-flow · #61',
+        name: 'flow-1d',
+        address: 'flow-1d',
+        project: 'claude-flow',
+        topic: '#61',
+        kind: 'interactive',
+        status: 'idle',
+        live: true,
+        lastMessageAt: 8,
+        unread: 0,
+        last: { dir: 'out', text: 'on it', at: 8 },
+      },
+    ])
+    expect(published.threads).toEqual({ S1aa: [{ dir: 'out', text: 'on it', at: 8 }] })
+
+    const gone = Thread.withListing(thread, { peers: [] }, 10)
+
+    expect(
+      Thread.herdrOf(gone, { id: 's1' }, 11).peers[0],
+      'once no longer listed, when it was last seen',
+    ).toMatchObject({ key: 'S1aa', live: false, lastSeenAt: 7 })
   })
 
   test("Herdr's outbox: its sends and read marks; anything else is none", async () => {
@@ -334,11 +708,20 @@ describe('thread', () => {
         { id: 'h2', to: '', text: '' },
       ],
       read: { api: 5 },
+      title: {},
     })
     expect(Thread.outboxOf('{"v":1}', 's1'), 'no session named: this one').toEqual({
       send: [],
       read: {},
+      title: {},
     })
+    expect(
+      Thread.outboxOf(
+        JSON.stringify({ v: 2, session: 's1', title: { S1: 'API backend', S2: '', S3: 7 } }),
+        's1',
+      ),
+      'v2 names conversations; an empty title clears one',
+    ).toEqual({ send: [], read: {}, title: { S1: 'API backend', S2: '' } })
     expect(
       Thread.outboxOf('{"v":1,"send":[{"id":"h1"', 's1'),
       'a half-written file',
@@ -347,10 +730,10 @@ describe('thread', () => {
 
   test('an outbox for another session, or of another version, asks nothing', async () => {
     const asks = { send: [{ id: 'h1', to: 'api', text: 'hi' }], read: { api: 5 } }
-    const none = { send: [], read: {} }
+    const none = { send: [], read: {}, title: {} }
 
     expect(Thread.outboxOf(JSON.stringify({ v: 1, session: 's0', ...asks }), 's1')).toEqual(none)
-    expect(Thread.outboxOf(JSON.stringify({ v: 2, session: 's1', ...asks }), 's1')).toEqual(none)
+    expect(Thread.outboxOf(JSON.stringify({ v: 3, session: 's1', ...asks }), 's1')).toEqual(none)
     expect(Thread.outboxOf(JSON.stringify({ session: 's1', ...asks }), 's1')).toEqual(none)
   })
 })

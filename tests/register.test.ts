@@ -5,11 +5,15 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import { OUTBOX_MS, REFRESH_MS } from '../hooks/register'
 import * as Thread from '../hooks/thread'
 import {
+  API_FLOW,
+  API_ID,
+  API_SESSION,
   CROSSTALK,
   FROM_TEAMMATE,
   fromPeer,
   JOURNAL,
   LISTING,
+  NEW_ID,
   PANE,
   SESSION,
   textOf,
@@ -50,8 +54,16 @@ function world(
   const reads: { failing: number; held?: Promise<void> } = { failing: 0 }
   // What the next write waits for before it lands.
   const writes: { holdNext?: Promise<void> } = {}
-  // Whether the store refuses every save.
-  const saves = { isFull: false }
+  // Whether the store refuses every save, how many reads of the titles fail
+  // next, and what a save of the titles waits for first.
+  const saves: {
+    isFull: boolean
+    titleReadsFailing: number
+    holdTitles?: Promise<void>
+    holdNextTitles?: Promise<void>
+  } = { isFull: false, titleReadsFailing: 0 }
+  // What ListAgents answers.
+  const agents = { listing: LISTING }
   let version = 0
 
   // What the next `clock.now` waits for before it answers: mock.clock owns
@@ -79,6 +91,10 @@ function world(
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.receive', ($, e) => ({ text: e.text }))
   on('session.id', () => ({ value: 's1' }))
+  // The main working tree's root, a worktree's too: its name is the project.
+  on('session.repo', () => ({
+    value: { root: '/home/me/Projects/api', remote: null, internal: false, name: null },
+  }))
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : env[e.name] }))
   on('fs.write', async ($, e) => {
     const held = writes.holdNext
@@ -113,6 +129,22 @@ function world(
       ? missing
       : { value: { kind: 'file', size: file.text.length, mtimeMs: file.mtimeMs, isLink: false } }
   })
+  on('fs.list', ($, e) => {
+    fsCalls.push(`list ${e.path}`)
+
+    const prefix = `${e.path ?? ''}/`
+    const entries = [...files]
+      .filter(([path]) => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))
+      .map(([path, file]) => ({
+        name: path.slice(prefix.length),
+        kind: 'file' as const,
+        size: file.text.length,
+        mtimeMs: file.mtimeMs,
+        isLink: false,
+      }))
+
+    return { value: entries }
+  })
   on('process.run', ($, e) => {
     runs.push(e.argv)
 
@@ -137,10 +169,26 @@ function world(
       },
     }
   })
-  on('store.get', ($, e) => ({ value: store.get(e.key) }))
-  on('store.set', ($, e) => {
+  on('store.get', ($, e) => {
+    if (e.key === 'titles' && saves.titleReadsFailing > 0) {
+      saves.titleReadsFailing -= 1
+
+      return { deny: 'the store could not be read' }
+    }
+
+    return { value: store.get(e.key) }
+  })
+  on('store.set', async ($, e) => {
     if (saves.isFull) {
       return { deny: 'the store is full' }
+    }
+
+    if (e.key === 'titles') {
+      const next = saves.holdNextTitles
+
+      saves.holdNextTitles = undefined
+      await saves.holdTitles
+      await next
     }
 
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
@@ -157,7 +205,7 @@ function world(
   on('tool.call', { tool: 'ListAgents' }, () => {
     listings.push(clock.now())
 
-    return { result: { listing: LISTING } }
+    return { result: { listing: agents.listing } }
   })
   on('tool.call', { tool: 'SendMessage' }, ($, e) => {
     sent.push(e)
@@ -211,9 +259,13 @@ function world(
     writes,
     saves,
     nowHold,
+    agents,
     // Herdr writing its outbox, as a new file each time.
     outbox: (value: unknown) =>
       files.set(OUTBOX, { text: JSON.stringify(value), mtimeMs: ++version }),
+    // Another terminal's file in Herdr's folder, a newer one each time.
+    herdrFile: (name: string, value: unknown) =>
+      files.set(`${HERDR}/${name}`, { text: JSON.stringify(value), mtimeMs: ++version }),
     // What crosstalk last published for Herdr.
     published: (): Thread.Publication => JSON.parse(files.get(PUBLICATION)?.text ?? 'null'),
   }
@@ -224,6 +276,34 @@ function world(
  */
 function inHerdr(on: On, stored: Record<string, unknown> = {}) {
   return world(on, [], stored, { HC_TERMINAL_ID: 't9' })
+}
+
+/**
+ * In world `w`, a session that `api` wrote to, its pane mounted on that
+ * conversation in rename mode: the ring moved to ‹ as the person would
+ * (normal mode), r pressed, and the engine's autoFocus landing on the title
+ * field. The ring moves with a ui.focus hook seated beneath.
+ */
+async function renaming($: Engine, on: On, w: ReturnType<typeof world>) {
+  const ring = (element: string) =>
+    $.ui.focus({ component: 'Pane', requestId: 'crosstalk', element, origin: { kind: 'person' } })
+
+  on('ui.focus', () => ({}))
+  await $.session.start(SESSION)
+  await $.session.receive(fromPeer('api', 'ready?'))
+  await $.command.run(CROSSTALK)
+
+  const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+  await ui.press({ key: 'open:api' })
+  await w.clock.advance(1000)
+  await ring('back')
+  await ui.redraw()
+  await ui.press({ key: 'vim:r' })
+  await ring('title')
+  await ui.redraw()
+
+  return ui
 }
 
 /**
@@ -710,6 +790,66 @@ describe('register', () => {
     expect(textOf(await $.ui.render(PANE))).not.toContain('‹ api')
   })
 
+  test('r renames the open conversation: the store keeps it, the pane shows it', async ($, on) => {
+    const w = world(on)
+    const ui = await renaming($, on, w)
+    const field = await ui.find({ key: 'title' })
+
+    expect(field?.props.value, 'empty: no title yet').toBe('')
+    expect(field?.props.autoFocus, 'the keys go to the title field').toBe(true)
+
+    await ui.input({ key: 'title', text: '  API backend ', kind: 'submit' })
+    await w.clock.settle()
+    await ui.redraw()
+
+    expect(w.store.get('titles')).toEqual({ api: 'API backend' })
+    expect(textOf(await ui.drawn())).toContain('API backend')
+    expect(await ui.find({ key: 'title' }), 'back to normal mode').toBeUndefined()
+  })
+
+  test('a title half typed survives a redraw', async ($, on) => {
+    const w = world(on)
+    const ui = await renaming($, on, w)
+
+    await ui.input({ key: 'title', text: 'half', kind: 'change' })
+    await w.clock.advance(REFRESH_MS)
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'title' }))?.props.value).toBe('half')
+  })
+
+  test('r starts from the title given, and says so when the store refuses one', async ($, on) => {
+    const w = world(on, [], { titles: { api: 'Old' } })
+    const ui = await renaming($, on, w)
+
+    expect((await ui.find({ key: 'title' }))?.props.value).toBe('Old')
+
+    w.saves.isFull = true
+    await ui.input({ key: 'title', text: 'New', kind: 'submit' })
+    await w.clock.settle()
+    await ui.redraw()
+
+    expect(w.store.get('titles')).toEqual({ api: 'Old' })
+    expect(textOf(await ui.drawn())).toContain('title not kept')
+  })
+
+  test('two titles stored at once are both kept', async ($, on) => {
+    const w = inHerdr(on)
+    const ui = await renaming($, on, w)
+    let release = () => {}
+
+    w.saves.holdNextTitles = new Promise(resolve => {
+      release = resolve
+    })
+    w.outbox({ v: 2, title: { web: 'W' } })
+    await w.clock.advance(OUTBOX_MS)
+    await ui.input({ key: 'title', text: 'B', kind: 'submit' })
+    release()
+    await w.clock.settle()
+
+    expect(w.store.get('titles')).toEqual({ web: 'W', api: 'B' })
+  })
+
   test('a message arriving while the pane is closed shows as unread', async ($, on) => {
     const w = world(on)
 
@@ -965,8 +1105,14 @@ describe('herdr', () => {
     expect(w.published().session, 'named by the listing taken at the start').toEqual({
       id: 's1',
       name: 'claude-98',
+      terminal: 't9',
+      cwd: '/work',
+      project: 'api',
     })
-    expect(w.published().peers.map(p => p.name)).toEqual(['api', 'web'])
+    expect(
+      w.published().peers.map(p => p.name),
+      'every listed session',
+    ).toEqual(['api', 'web', 'laptop-bubble', 'ultrareview: HEAD'])
 
     await w.clock.advance(1000)
     await $.session.receive(fromPeer('api', '**ready?**'))
@@ -976,9 +1122,14 @@ describe('herdr', () => {
 
     expect(published.updatedAt).toBe(1000)
     expect(published.peers[0]).toEqual({
+      key: 'api',
+      title: 'api',
       name: 'api',
       address: 'api',
+      kind: 'interactive',
       status: 'idle',
+      live: true,
+      lastMessageAt: 1000,
       unread: 1,
       last: { dir: 'in', text: '**ready?**', at: 1000 },
     })
@@ -1091,5 +1242,357 @@ describe('herdr', () => {
     await w.clock.advance(REFRESH_MS)
 
     expect(w.listings).toHaveLength(before + 1)
+  })
+})
+
+describe('names', () => {
+  test('in Herdr, a peer another terminal publishes is filed under its session id', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.herdrFile('t3.flow.json', API_FLOW)
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')).toMatchObject({
+      key: API_ID,
+      sessionId: API_ID,
+      title: 'api-repo · #61',
+      project: 'api-repo',
+      topic: '#61',
+      live: true,
+    })
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['ready?'])
+
+    w.outbox({ v: 2, send: [{ id: 'h1', to: API_ID, text: 'yes' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(
+      w.sent.map(e => Reflect.get(e, 'to')),
+      'a reply goes to its live name',
+    ).toEqual(['api'])
+  })
+
+  test('a peer restarted under a new name keeps its conversation', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'before'))
+    w.agents.listing = LISTING.replace('api [a1aa87]', 'api-1d [b2bb22]')
+    w.herdrFile('t3.crosstalk.json', {
+      ...API_SESSION,
+      session: { ...API_SESSION.session, name: 'api-1d' },
+    })
+    await w.clock.advance(REFRESH_MS)
+    await $.session.receive(fromPeer('api-1d', 'after'))
+    await w.clock.settle()
+
+    expect(Object.keys(w.published().threads)).toEqual([API_ID])
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['before', 'after'])
+  })
+
+  test("other terminals' files are read again only once changed, never this one's", async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await w.clock.advance(REFRESH_MS * 2)
+
+    expect(w.fsCalls.filter(call => call === `read ${HERDR}/t3.crosstalk.json`)).toHaveLength(1)
+    expect(w.fsCalls).not.toContain(`read ${PUBLICATION}`)
+  })
+
+  test('a hand-written file whose id is no session id is not believed', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.herdrFile('t-fixture.crosstalk.json', {
+      ...API_SESSION,
+      session: { ...API_SESSION.session, id: 'xtfix-session-2', terminal: 't-fixture' },
+    })
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(API_ID)
+  })
+
+  test('a publication that could not be read is read again, though unchanged', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.reads.failing = 1
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe('api')
+
+    await w.clock.advance(REFRESH_MS)
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(API_ID)
+  })
+
+  test("a peer still on v1 gets its topic through its file's terminal name", async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', { v: 1, session: { id: API_ID, name: 'api' } })
+    w.herdrFile('t3.flow.json', API_FLOW)
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.topic).toBe('#61')
+  })
+
+  test('when two terminals claim one name, the newest file says who it is', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.herdrFile('t4.crosstalk.json', {
+      ...API_SESSION,
+      session: { ...API_SESSION.session, id: NEW_ID, terminal: 't4' },
+    })
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(NEW_ID)
+  })
+
+  test('a title from Herdr is kept in the shared store and published; empty, it clears', async ($, on) => {
+    const w = inHerdr(on, { titles: { 'S-other': 'kept' } })
+    const titleOf = () => w.published().peers.find(peer => peer.key === 'api')?.title
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, title: { api: 'API backend' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles'), "another session's title kept").toEqual({
+      'S-other': 'kept',
+      api: 'API backend',
+    })
+    expect(titleOf()).toBe('API backend')
+
+    w.outbox({ v: 2, title: { api: '' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ 'S-other': 'kept' })
+    expect(titleOf()).toBe('api')
+  })
+
+  test('a title another session gave shows here, at the next listing too', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'from elsewhere' } })
+    const titleOf = () => w.published().peers.find(peer => peer.key === 'api')?.title
+
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(titleOf()).toBe('from elsewhere')
+
+    w.store.set('titles', { api: 'renamed elsewhere' })
+    await w.clock.advance(REFRESH_MS)
+
+    expect(titleOf()).toBe('renamed elsewhere')
+  })
+
+  test('a conversation that resolves takes its title along, in the store too', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'API backend' } })
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await w.clock.advance(REFRESH_MS)
+
+    expect(w.store.get('titles')).toEqual({ [API_ID]: 'API backend' })
+    expect(w.published().peers.find(peer => peer.name === 'api')).toMatchObject({
+      key: API_ID,
+      title: 'API backend',
+    })
+  })
+
+  test('a message landing while a moved title is stored is kept', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'API backend' } })
+    let release = () => {}
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'before'))
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.saves.holdTitles = new Promise(resolve => {
+      release = resolve
+    })
+    await w.clock.advance(REFRESH_MS)
+    await $.session.receive(fromPeer('api', 'during'))
+    w.saves.holdTitles = undefined
+    release()
+    await w.clock.settle()
+
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['before', 'during'])
+    expect(w.store.get('titles')).toEqual({ [API_ID]: 'API backend' })
+  })
+
+  test('titles that could not be read are not written over; the outbox is read again', async ($, on) => {
+    const w = inHerdr(on, { titles: { 'S-other': 'kept' } })
+
+    await $.session.start(SESSION)
+    w.saves.titleReadsFailing = 1
+    w.outbox({ v: 2, title: { api: 'API backend' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles'), "another session's titles intact").toEqual({ 'S-other': 'kept' })
+
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ 'S-other': 'kept', api: 'API backend' })
+  })
+
+  test('Herdr may name a resolved peer: to, read and title by name reach its id', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'one'))
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'by name' }], read: { api: 0 } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent.map(e => Reflect.get(e, 'to'))).toEqual(['api'])
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['one', 'by name'])
+    expect(w.published().peers.find(peer => peer.key === API_ID)?.unread).toBe(0)
+
+    w.outbox({ v: 2, title: { api: 'API backend' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ [API_ID]: 'API backend' })
+  })
+
+  test('Herdr may write to any session the publication lists, talked to or not', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, send: [{ id: 'h1', to: 'laptop-bubble', text: 'hi' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent.map(e => Reflect.get(e, 'to'))).toEqual(['laptop-bubble'])
+  })
+
+  test('a draft moves with its conversation when it resolves', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
+    await ui.input({ key: 'reply', text: 'half a thought', kind: 'change' })
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await w.clock.advance(REFRESH_MS)
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'reply' }))?.props.value).toBe('half a thought')
+  })
+
+  test("Herdr's title applies once, when it appears or changes, not at each read", async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'hi'))
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'A' })
+
+    // Renamed since, from another session (or with r).
+    w.store.set('titles', { api: 'B' })
+    await w.clock.advance(REFRESH_MS)
+    w.outbox({ v: 2, title: { api: 'A' }, read: { api: 0 } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles'), 'the same title read again undoes nothing').toEqual({
+      api: 'B',
+    })
+
+    w.outbox({ v: 2, title: { api: 'C' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'C' })
+  })
+
+  test("a title Herdr's outbox already gave is not given again after a reload", async ($, on) => {
+    const saved = Thread.toSaved({ ...Thread.EMPTY, fromOutbox: { api: 'A' } }, 1)
+    const w = inHerdr(on, { 'thread:s1': saved, titles: { api: 'B' } })
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'B' })
+  })
+
+  test('a title for no published peer is not stored', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, title: { nobody: 'X' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toBeUndefined()
+  })
+
+  test('a peer renamed at the same socket takes its stored title along', async ($, on) => {
+    const w = world(on, [], { titles: { 'api-3e': 'API backend' } })
+    const from = (name: string, text: string) => ({
+      origin: { kind: 'peer' as const },
+      text: `<cross-session-message from="uds:/tmp/1.sock" from-name="${name}">${text}</cross-session-message>`,
+    })
+
+    await $.session.start(SESSION)
+    await $.session.receive(from('api-3e', 'one'))
+    await $.session.receive(from('api-v2', 'two'))
+    await w.clock.settle()
+
+    expect(w.store.get('titles')).toEqual({ 'api-v2': 'API backend' })
+  })
+
+  test('a session leaving the listing: when it was last seen is kept for the next start', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'bye'))
+    await w.clock.advance(REFRESH_MS)
+    w.agents.listing = LISTING.replace(/\n {2}api \[a1aa87\][^\n]*/, '')
+    await w.clock.advance(REFRESH_MS)
+
+    expect(Thread.fromSaved(w.store.get('thread:s1'))?.seen.api).toBe(REFRESH_MS)
+  })
+
+  test('a title Herdr took out of its outbox and gives again applies again', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'hi'))
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+    w.outbox({ v: 2 })
+    await w.clock.advance(OUTBOX_MS)
+    w.store.set('titles', { api: 'B' })
+    await w.clock.advance(REFRESH_MS)
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'A' })
+  })
+
+  test('a session in Herdr leaves alone a title given by name to a peer it never talked to', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'T' } })
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.store.get('titles'), 'a session outside Herdr keeps it by name').toEqual({
+      api: 'T',
+    })
+    expect(w.published().peers.find(peer => peer.key === API_ID)?.title).toBe('T')
   })
 })

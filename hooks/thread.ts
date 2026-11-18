@@ -36,7 +36,31 @@ export type Thread = {
   aliases: Readonly<Record<string, string>>
   // What became of each Herdr outbox entry, by its id.
   handled: Readonly<Record<string, Handled>>
+  // A listed session's live name to its session id, as Herdr's directory
+  // last said: a conversation is filed by the id, which survives a restart.
+  ids: Readonly<Record<string, string>>
+  // What is known of the peer behind each key, for its title.
+  known: Readonly<Record<string, Known>>
+  // The titles the person gave, by key: the store's, shared by sessions.
+  titles: Readonly<Record<string, string>>
+  // When ListAgents last listed each key.
+  seen: Readonly<Record<string, number>>
+  // The titles Herdr's outbox gave, by the key it wrote them under: each
+  // applies once, when it appears or changes, not at every read.
+  fromOutbox: Readonly<Record<string, string>>
 }
+
+/**
+ * What a key's peer was last known as: its live name, its project, and what
+ * it works on (its claude-flow issue or branch).
+ */
+export type Known = { name?: string; project?: string; topic?: string }
+
+/**
+ * One session Herdr's directory names: another terminal's publication, its
+ * project, and the topic its claude-flow file gives.
+ */
+export type Session = { id: string; name: string; project?: string; topic?: string }
 
 /**
  * What became of one Herdr outbox entry: sent, refused and why, or pending
@@ -49,6 +73,7 @@ export type Handled =
 
 export type Conversation = {
   peer: string
+  title: string
   status?: string
   unread: number
   last?: Entry
@@ -63,9 +88,30 @@ export type Saved = {
   selected?: string
   aliases: Record<string, string>
   handled?: Record<string, Handled>
+  known?: Record<string, Known>
+  seen?: Record<string, number>
+  fromOutbox?: Record<string, string>
 }
 
-export const EMPTY: Thread = { entries: [], peers: [], unread: {}, aliases: {}, handled: {} }
+export const EMPTY: Thread = {
+  entries: [],
+  peers: [],
+  unread: {},
+  aliases: {},
+  handled: {},
+  ids: {},
+  known: {},
+  titles: {},
+  seen: {},
+  fromOutbox: {},
+}
+
+// A session's name is its folder's and two hex digits of its own.
+const NAME_SUFFIX = /-[0-9a-f]{2}$/
+
+// A Claude Code session id: a UUID. Anything else in Herdr's folder was
+// written by hand (a test's fixture) and names no session.
+const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
 
 // ponytail: one flat cap for the whole session, per-peer caps if a chatty
 // peer ends up pushing the others' history out.
@@ -141,11 +187,37 @@ export function inboundOf(text: string): Inbound {
 }
 
 /**
- * The conversation a SendMessage `to` belongs to: the name behind a socket
- * address a peer wrote from, else the address without its ref.
+ * The key a live session name files its conversation under: the session id
+ * Herdr's directory gives it, else the name itself.
+ */
+export function keyOf(thread: Thread, name: string): string {
+  return Object.hasOwn(thread.ids, name) ? (thread.ids[name] ?? name) : name
+}
+
+/**
+ * The key a delivery from `name`, at socket `address`, files under: the
+ * session id its name resolves to; else, when its socket was last known
+ * as a session id, that id (the directory may not have been read yet, and
+ * a key goes from a name to an id, never back); else the name.
+ */
+export function senderOf(thread: Thread, name: string, address: string | undefined): string {
+  const key = keyOf(thread, name)
+  const aliased =
+    address !== undefined && Object.hasOwn(thread.aliases, address)
+      ? thread.aliases[address]
+      : undefined
+  const isSession =
+    aliased !== undefined && aliased !== name && Object.hasOwn(thread.known, aliased)
+
+  return key === name && isSession ? aliased : key
+}
+
+/**
+ * The conversation a SendMessage `to` belongs to: the key behind a socket
+ * address a peer wrote from, else the key of the address without its ref.
  */
 export function peerOf(thread: Thread, to: string): string {
-  return thread.aliases[to] ?? nameOf(to)
+  return Object.hasOwn(thread.aliases, to) ? (thread.aliases[to] ?? to) : keyOf(thread, nameOf(to))
 }
 
 /**
@@ -164,31 +236,89 @@ export function withAlias(thread: Thread, address: string | undefined, peer: str
   return before === undefined ? known : renamed(known, before, peer)
 }
 
+/**
+ * `record` without `key`, and its value under `key`.
+ */
+function without<V>(record: Readonly<Record<string, V>>, key: string): [Record<string, V>, V?] {
+  const { [key]: value, ...rest } = record
+
+  return Object.hasOwn(record, key) ? [rest, value] : [{ ...record }]
+}
+
+/**
+ * The thread with everything filed under `from` moved to `to`: messages,
+ * unread (added up), the selection, socket aliases, the title (`to`'s own
+ * wins), when it was seen (the latest) and what is known of it.
+ */
 function renamed(thread: Thread, from: string, to: string): Thread {
-  const { [from]: count = 0, ...unread } = thread.unread
+  const [unread, count = 0] = without(thread.unread, from)
+  const [titles, title] = without(thread.titles, from)
+  const moved = movedLocally(thread, from, to)
 
   return {
-    ...thread,
-    entries: thread.entries.map(entry => (entry.peer === from ? { ...entry, peer: to } : entry)),
-    unread: count > 0 ? { ...unread, [to]: (unread[to] ?? 0) + count } : unread,
+    ...moved,
+    entries: thread.entries.some(entry => entry.peer === from)
+      ? thread.entries.map(entry => (entry.peer === from ? { ...entry, peer: to } : entry))
+      : thread.entries,
+    unread: count > 0 ? { ...unread, [to]: unreadOf(thread, to) + count } : unread,
     selected: thread.selected === from ? to : thread.selected,
     aliases: Object.fromEntries(
       Object.entries(thread.aliases).map(([address, name]) => [address, name === from ? to : name]),
     ),
+    titles: title === undefined || Object.hasOwn(titles, to) ? titles : { ...titles, [to]: title },
   }
 }
 
 /**
- * Where a reply to `peer` goes: its name while ListAgents lists it, else the
- * socket it last wrote from (it outlives a rename, not a restart), else the
- * name as it is.
+ * The thread with what it alone keeps of `from` (when it was seen, what is
+ * known of it) moved to `to`: the latest time, `to`'s own knowledge first.
  */
-export function addressOf(thread: Thread, peer: string): string {
-  if (thread.peers.some(listed => listed.name === peer)) {
-    return peer
-  }
+function movedLocally(thread: Thread, from: string, to: string): Thread {
+  const [seen, at] = without(thread.seen, from)
+  const [known, was] = without(thread.known, from)
 
-  return Object.entries(thread.aliases).findLast(([, name]) => name === peer)?.[0] ?? peer
+  return {
+    ...thread,
+    seen:
+      at === undefined
+        ? seen
+        : { ...seen, [to]: Math.max(at, Object.hasOwn(seen, to) ? (seen[to] ?? 0) : 0) },
+    known: was === undefined ? known : { ...known, [to]: { ...was, ...knownOf(thread, to) } },
+  }
+}
+
+/**
+ * What is known of `key`'s peer: its own entry only, since a key may be
+ * named `constructor`.
+ */
+function knownOf(thread: Thread, key: string): Known {
+  return Object.hasOwn(thread.known, key) ? (thread.known[key] ?? {}) : {}
+}
+
+/**
+ * The name `key`'s session goes by in the current listing, if listed.
+ */
+function liveNameOf(thread: Thread, key: string): string | undefined {
+  return thread.peers.find(listed => keyOf(thread, listed.name) === key)?.name
+}
+
+/**
+ * Where a reply to `key` goes: its live name while ListAgents lists it, else
+ * the socket it last wrote from (it outlives a rename, not a restart), else
+ * the name it was last known by, unless another session holds that name now.
+ */
+export function addressOf(thread: Thread, key: string): string {
+  const { name } = knownOf(thread, key)
+  // Listed now under another key, resolved or not, the name is someone else's.
+  const lastName =
+    name !== undefined && !thread.peers.some(listed => listed.name === name) ? name : undefined
+
+  return (
+    liveNameOf(thread, key) ??
+    Object.entries(thread.aliases).findLast(([, peer]) => peer === key)?.[0] ??
+    lastName ??
+    key
+  )
 }
 
 /**
@@ -259,17 +389,234 @@ export function select(thread: Thread, peer: string): Thread {
 }
 
 /**
- * The thread with the peers a fresh listing reported.
+ * The thread with the peers a fresh listing reported, each seen at `at`
+ * when given.
  */
 export function withListing(
   thread: Thread,
   listing: { self?: string; peers: readonly Peer[] },
+  at?: number,
 ): Thread {
   const self = listing.self ?? thread.self
+  const seen =
+    at === undefined
+      ? thread.seen
+      : {
+          ...thread.seen,
+          ...Object.fromEntries(listing.peers.map(peer => [keyOf(thread, peer.name), at])),
+        }
+  const listed = { ...thread, peers: listing.peers, seen }
 
-  return self === undefined
-    ? { ...thread, peers: listing.peers }
-    : { ...thread, self, peers: listing.peers }
+  return self === undefined ? listed : { ...listed, self }
+}
+
+/**
+ * The thread knowing which session each listed name is, from Herdr's
+ * directory: the map is rebuilt from the sessions listed now (not this one),
+ * so a name a restart handed to another session moves on with it. A
+ * conversation filed under such a name moves to the session id.
+ */
+export function withDirectory(thread: Thread, sessions: readonly Session[]): Thread {
+  const listed = new Set(thread.peers.map(peer => peer.name))
+  const named = sessions.filter(
+    session =>
+      listed.has(session.name) && session.name !== thread.self && session.name !== session.id,
+  )
+  let next: Thread = {
+    ...thread,
+    ids: Object.fromEntries(named.map(session => [session.name, session.id])),
+    known: {
+      ...thread.known,
+      ...Object.fromEntries(
+        named.map(({ id, name, project, topic }) => [
+          id,
+          {
+            name,
+            ...(project === undefined ? {} : { project }),
+            ...(topic === undefined ? {} : { topic }),
+          },
+        ]),
+      ),
+    },
+  }
+
+  // A conversation moves whole, its title with it; without one, only what
+  // this session alone keeps: a title in the shared store is left as given.
+  for (const { id, name } of named) {
+    next = isFiled(next, name) ? renamed(next, name, id) : movedLocally(next, name, id)
+  }
+
+  return next
+}
+
+/**
+ * Whether this session has a conversation filed under `key`: messages,
+ * unread, the selection or a socket alias. A title alone is not one: the
+ * store is every session's, and a session outside Herdr files by name.
+ */
+function isFiled(thread: Thread, key: string): boolean {
+  return (
+    thread.selected === key ||
+    thread.entries.some(entry => entry.peer === key) ||
+    Object.values(thread.aliases).includes(key) ||
+    Object.hasOwn(thread.unread, key)
+  )
+}
+
+/**
+ * What another terminal's publication says of its session: id, live name,
+ * terminal, project. Undefined without a name to map, with an id that is no
+ * session id (a hand-written file), or for a file caught mid-write.
+ */
+export function sessionOf(
+  text: string,
+): { id: string; name: string; terminal?: string; project?: string } | undefined {
+  let value: unknown
+
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+
+  const session = isRecord(value) && isRecord(value.session) ? value.session : {}
+  const { id, name, terminal, project } = session
+
+  if (typeof id !== 'string' || typeof name !== 'string' || !SESSION_ID.test(id) || name === '') {
+    return undefined
+  }
+
+  return {
+    id,
+    name,
+    ...(typeof terminal === 'string' ? { terminal } : {}),
+    ...(typeof project === 'string' ? { project } : {}),
+  }
+}
+
+/**
+ * What a terminal's claude-flow file says it works on: its issue (`#61`),
+ * else its branch.
+ */
+export function topicOf(text: string): string | undefined {
+  let value: unknown
+
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+
+  const steps = isRecord(value) && Array.isArray(value.steps) ? value.steps.filter(isRecord) : []
+  const labelOf = (id: string) => {
+    const label = steps.find(step => step.id === id)?.label
+
+    // A step not filled in yet is its bare id: it says nothing.
+    const detail = typeof label === 'string' ? new RegExp(`^${id}\\s+(.+)$`).exec(label) : null
+
+    return detail?.[1]?.trim() || undefined
+  }
+
+  return labelOf('issue') ?? labelOf('branch')
+}
+
+/**
+ * The thread with `title` given to `key`; an empty one clears it.
+ */
+export function withTitle(thread: Thread, key: string, title: string): Thread {
+  const [titles] = without(thread.titles, key)
+  const given = title.trim()
+
+  return { ...thread, titles: given === '' ? titles : { ...titles, [key]: given } }
+}
+
+/**
+ * The thread with the titles the store holds.
+ */
+export function withTitles(thread: Thread, value: unknown): Thread {
+  const titles = Object.fromEntries(
+    Object.entries(isRecord(value) ? value : {}).filter(
+      (pair): pair is [string, string] => typeof pair[1] === 'string' && pair[1] !== '',
+    ),
+  )
+
+  return { ...thread, titles }
+}
+
+/**
+ * The name a key's peer goes by: listed now, else as last known, else the
+ * key itself.
+ */
+function nameOfKey(thread: Thread, key: string): string {
+  return liveNameOf(thread, key) ?? knownOf(thread, key).name ?? key
+}
+
+/**
+ * A key's project: the one its publication gives, else its name without the
+ * random suffix a session's name carries; none for a name without one (a
+ * Remote Control or cloud session's).
+ */
+function projectOf(thread: Thread, key: string, name: string): string | undefined {
+  return (
+    knownOf(thread, key).project ??
+    (NAME_SUFFIX.test(name) ? name.replace(NAME_SUFFIX, '') : undefined)
+  )
+}
+
+/**
+ * Each key's title: the one the person gave, else `project · topic`, else
+ * the project, else the name. Two keys whose project is all they have are
+ * told apart by their session id's first characters, or else by their names.
+ */
+export function titlesOf(thread: Thread, keys: readonly string[]): Record<string, string> {
+  // The title given to the key, else to its name: a session outside Herdr
+  // gives one by name.
+  const givenOf = (key: string, name: string) =>
+    Object.hasOwn(thread.titles, key)
+      ? thread.titles[key]
+      : Object.hasOwn(thread.titles, name)
+        ? thread.titles[name]
+        : undefined
+  const derived = keys.map(key => {
+    const name = nameOfKey(thread, key)
+    const base = projectOf(thread, key, name) ?? name
+    const { topic } = knownOf(thread, key)
+
+    return {
+      key,
+      name,
+      given: givenOf(key, name),
+      title: topic === undefined ? base : `${base} · ${topic}`,
+    }
+  })
+  const counts = new Map<string, number>()
+
+  for (const { given, title } of derived) {
+    if (given === undefined) counts.set(title, (counts.get(title) ?? 0) + 1)
+  }
+
+  return Object.fromEntries(
+    derived.map(({ key, name, given, title }) => {
+      const isSession = Object.hasOwn(thread.known, key) && key !== name
+      const twin = (counts.get(title) ?? 0) > 1
+      const told = !twin ? title : isSession ? `${title} · ${key.slice(0, 4)}` : name
+
+      return [key, given ?? told]
+    }),
+  )
+}
+
+const KINDS: Readonly<Record<string, string>> = {
+  'Remote Control': 'remote',
+  bg: 'background',
+}
+
+/**
+ * A ListAgents kind as Herdr reads it: `interactive`, `remote`, `cloud`,
+ * `background`.
+ */
+export function kindOf(kind: string): string {
+  return KINDS[kind] ?? kind.toLowerCase()
 }
 
 /**
@@ -278,8 +625,8 @@ export function withListing(
  * recent first, a message without a time counting as the oldest.
  */
 export function conversationsOf(thread: Thread): Conversation[] {
-  const byPeer = new Map<string, Conversation>()
-  const statusOf = new Map(thread.peers.map(peer => [peer.name, peer.status]))
+  const byPeer = new Map<string, Omit<Conversation, 'title'>>()
+  const statusOf = new Map(thread.peers.map(peer => [keyOf(thread, peer.name), peer.status]))
 
   for (const entry of thread.entries) {
     byPeer.set(entry.peer, {
@@ -291,12 +638,19 @@ export function conversationsOf(thread: Thread): Conversation[] {
   }
 
   const active = [...byPeer.values()].sort((a, b) => (b.last?.at ?? 0) - (a.last?.at ?? 0))
-
   const idle = thread.peers
-    .filter(peer => peer.kind === 'interactive' && !byPeer.has(peer.name))
-    .map(peer => ({ peer: peer.name, status: peer.status, unread: 0 }))
+    .filter(peer => peer.kind === 'interactive' && !byPeer.has(keyOf(thread, peer.name)))
+    .map(peer => ({ peer: keyOf(thread, peer.name), status: peer.status, unread: 0 }))
+  const rows = [...active, ...idle]
+  const titles = titlesOf(
+    thread,
+    keysOf(
+      thread,
+      rows.map(row => row.peer),
+    ),
+  )
 
-  return [...active, ...idle]
+  return rows.map(row => ({ ...row, title: titles[row.peer] ?? row.peer }))
 }
 
 /**
@@ -317,11 +671,19 @@ export function unreadCount(thread: Thread): number {
  * What to keep in `$.store`.
  */
 export function toSaved(thread: Thread, now: number): Saved {
+  // What is known of peers stays bounded: those talked to (the messages are
+  // capped), and those listed now.
+  const kept = new Set(keysOf(thread, [...new Set(thread.entries.map(entry => entry.peer))]))
+  const bounded = <V>(record: Readonly<Record<string, V>>) =>
+    Object.fromEntries(Object.entries(record).filter(([key]) => kept.has(key)))
   const saved = {
     savedAt: now,
     entries: [...thread.entries],
     aliases: { ...thread.aliases },
     handled: { ...thread.handled },
+    known: bounded(thread.known),
+    seen: bounded(thread.seen),
+    fromOutbox: { ...thread.fromOutbox },
   }
 
   return thread.selected === undefined ? saved : { ...saved, selected: thread.selected }
@@ -387,7 +749,26 @@ export function fromSaved(value: unknown): Thread | undefined {
       return known === undefined ? [] : [[id, known]]
     }),
   )
-  const thread = { ...EMPTY, entries, aliases, handled }
+  const text = (record: Record<string, unknown>, key: string) =>
+    typeof record[key] === 'string' ? { [key]: record[key] } : {}
+  const known = Object.fromEntries(
+    Object.entries(isRecord(value.known) ? value.known : {}).flatMap(([key, peer]) =>
+      isRecord(peer)
+        ? [[key, { ...text(peer, 'name'), ...text(peer, 'project'), ...text(peer, 'topic') }]]
+        : [],
+    ),
+  )
+  const seen = Object.fromEntries(
+    Object.entries(isRecord(value.seen) ? value.seen : {}).filter(
+      (pair): pair is [string, number] => typeof pair[1] === 'number',
+    ),
+  )
+  const fromOutbox = Object.fromEntries(
+    Object.entries(isRecord(value.fromOutbox) ? value.fromOutbox : {}).filter(
+      (pair): pair is [string, string] => typeof pair[1] === 'string',
+    ),
+  )
+  const thread = { ...EMPTY, entries, aliases, handled, known, seen, fromOutbox }
 
   return typeof value.selected === 'string' ? { ...thread, selected: value.selected } : thread
 }
@@ -551,20 +932,40 @@ export function readUpTo(thread: Thread, peer: string, at: number): Thread {
 export type HerdrMessage = { dir: Direction; text: string; at?: number; id?: string }
 
 /**
+ * One peer as Herdr reads it: its stable key, what to call it, where it
+ * stands, and its conversation's state.
+ */
+export type HerdrPeer = {
+  key: string
+  sessionId?: string
+  title: string
+  name: string
+  address: string
+  project?: string
+  topic?: string
+  kind?: string
+  status?: string
+  live: boolean
+  lastSeenAt?: number
+  lastMessageAt?: number
+  unread: number
+  last?: HerdrMessage
+}
+
+/**
+ * This session as it publishes itself: its id, and where it runs.
+ */
+export type Self = { id: string; terminal?: string; cwd?: string; project?: string }
+
+/**
  * What crosstalk publishes for Herdr: the contract of the README's Herdr
  * section, version `v`.
  */
 export type Publication = {
-  v: 1
-  session: { id: string; name?: string }
+  v: 2
+  session: Self & { name?: string }
   updatedAt: number
-  peers: {
-    name: string
-    address: string
-    status?: string
-    unread: number
-    last?: HerdrMessage
-  }[]
+  peers: HerdrPeer[]
   threads: Record<string, HerdrMessage[]>
   handled: Record<string, Handled>
 }
@@ -574,11 +975,19 @@ function herdrMessageOf({ dir, text, at, id }: Entry): HerdrMessage {
 }
 
 /**
- * The publication for session `id`: every conversation as the inbox orders
- * it, each one's messages oldest first, and each outbox entry's result
- * (a pending one is not one yet).
+ * Every key worth a title, so twins are told apart the same way everywhere:
+ * each conversation's and each listed session's.
  */
-export function herdrOf(thread: Thread, id: string, updatedAt: number): Publication {
+function keysOf(thread: Thread, first: readonly string[]): string[] {
+  return [...new Set([...first, ...thread.peers.map(peer => keyOf(thread, peer.name))])]
+}
+
+/**
+ * The publication for session `self`: every conversation as the inbox orders
+ * it then every other listed session, each one's messages oldest first, and
+ * each outbox entry's result (a pending one is not one yet).
+ */
+export function herdrOf(thread: Thread, self: Self, updatedAt: number): Publication {
   // A Map, not an object: a peer may be named `constructor` or `__proto__`.
   const threads = new Map<string, HerdrMessage[]>()
 
@@ -586,17 +995,42 @@ export function herdrOf(thread: Thread, id: string, updatedAt: number): Publicat
     threads.set(entry.peer, [...(threads.get(entry.peer) ?? []), herdrMessageOf(entry)])
   }
 
-  return {
-    v: 1,
-    session: thread.self === undefined ? { id } : { id, name: thread.self },
-    updatedAt,
-    peers: conversationsOf(thread).map(({ peer, status, unread, last }) => ({
-      name: peer,
-      address: addressOf(thread, peer),
-      ...(status === undefined ? {} : { status }),
+  const conversations = new Map(conversationsOf(thread).map(c => [c.peer, c]))
+  const keys = keysOf(thread, [...conversations.keys()])
+  const titles = titlesOf(thread, keys)
+  const peers = keys.map((key): HerdrPeer => {
+    const { unread = 0, last } = conversations.get(key) ?? {}
+    const listed = thread.peers.find(peer => keyOf(thread, peer.name) === key)
+    const name = nameOfKey(thread, key)
+    const project = projectOf(thread, key, name)
+    const { topic } = knownOf(thread, key)
+    const seen = Object.hasOwn(thread.seen, key) ? thread.seen[key] : undefined
+    const isSession = Object.hasOwn(thread.known, key) && key !== name
+
+    return {
+      key,
+      ...(isSession ? { sessionId: key } : {}),
+      title: titles[key] ?? name,
+      name,
+      address: addressOf(thread, key),
+      ...(project === undefined ? {} : { project }),
+      ...(topic === undefined ? {} : { topic }),
+      ...(listed === undefined ? {} : { kind: kindOf(listed.kind), status: listed.status }),
+      live: listed !== undefined,
+      // A listed session is seen now: its time would rewrite the file at
+      // every listing for nothing.
+      ...(seen === undefined || listed !== undefined ? {} : { lastSeenAt: seen }),
+      ...(last?.at === undefined ? {} : { lastMessageAt: last.at }),
       unread,
       ...(last === undefined ? {} : { last: { ...herdrMessageOf(last), id: undefined } }),
-    })),
+    }
+  })
+
+  return {
+    v: 2,
+    session: thread.self === undefined ? self : { ...self, name: thread.self },
+    updatedAt,
+    peers,
     threads: Object.fromEntries(threads),
     handled: Object.fromEntries(
       Object.entries(thread.handled).filter(([, result]) => result.status !== 'pending'),
@@ -605,15 +1039,19 @@ export function herdrOf(thread: Thread, id: string, updatedAt: number): Publicat
 }
 
 /**
- * One message Herdr asks to send: `to` a conversation's name.
+ * One message Herdr asks to send: `to` a conversation's key or name.
  */
 export type Outgoing = { id: string; to: string; text: string }
 
 /**
- * What Herdr's outbox asks: messages to send, and each conversation read up
- * to a time.
+ * What Herdr's outbox asks: messages to send, each conversation read up to a
+ * time, and titles to give (an empty one clears).
  */
-export type Outbox = { send: Outgoing[]; read: Record<string, number> }
+export type Outbox = {
+  send: Outgoing[]
+  read: Record<string, number>
+  title: Record<string, string>
+}
 
 /**
  * What Herdr's outbox asks of session `session`, or undefined when its text
@@ -633,8 +1071,10 @@ export function outboxOf(text: string, session: string): Outbox | undefined {
 
   const record = isRecord(value) ? value : {}
 
-  if (record.v !== 1 || (record.session !== undefined && record.session !== session)) {
-    return { send: [], read: {} }
+  const isVersion = record.v === 1 || record.v === 2
+
+  if (!isVersion || (record.session !== undefined && record.session !== session)) {
+    return { send: [], read: {}, title: {} }
   }
 
   const send = (Array.isArray(record.send) ? record.send : []).flatMap(entry =>
@@ -653,6 +1093,11 @@ export function outboxOf(text: string, session: string): Outbox | undefined {
       (pair): pair is [string, number] => typeof pair[1] === 'number',
     ),
   )
+  const title = Object.fromEntries(
+    Object.entries(isRecord(record.title) ? record.title : {}).filter(
+      (pair): pair is [string, string] => typeof pair[1] === 'string',
+    ),
+  )
 
-  return { send, read }
+  return { send, read, title }
 }

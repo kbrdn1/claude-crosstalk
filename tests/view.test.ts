@@ -149,6 +149,9 @@ function kitOf(overrides: Partial<View.Kit> = {}) {
     onTop: () => calls.push('top'),
     onInsert: () => calls.push('insert'),
     onClose: () => calls.push('close'),
+    onRename: () => calls.push('rename'),
+    onTitleInput: text => calls.push(`typed ${text}`),
+    onTitle: title => calls.push(`title ${title}`),
     ...overrides,
   }
 
@@ -219,11 +222,11 @@ describe('vim keys', () => {
     expect(textOf(tree)).toContain('esc normal')
   })
 
-  test('normal mode binds j k d u g i h q to scroll, reply, go back and close', async () => {
+  test('normal mode binds j k d u g i r h q to scroll, reply, rename, go back and close', async () => {
     const { kit, calls } = kitOf({ view: 'thread', mode: 'normal', home: 'back' })
     const tree = View.paneView(kit, { ...THREAD, selected: 'api' })
 
-    for (const key of ['j', 'k', 'd', 'u', 'g', 'i', 'h', 'q']) {
+    for (const key of ['j', 'k', 'd', 'u', 'g', 'i', 'r', 'h', 'q']) {
       press(tree, key)
     }
 
@@ -234,9 +237,77 @@ describe('vim keys', () => {
       'back 1',
       'back -2',
       'insert',
+      'rename',
       'inbox',
       'close',
     ])
+  })
+
+  test('rename mode asks the title in place of the reply, what was typed kept in it', async () => {
+    const { kit, calls } = kitOf({
+      view: 'thread',
+      mode: 'rename',
+      home: 'title',
+      titleDraft: 'API backend',
+    })
+    const thread = Thread.withTitle({ ...THREAD, selected: 'api' }, 'api', 'stored')
+    const tree = View.paneView(kit, thread)
+    const inputs = (node: unknown): Node[] =>
+      Array.isArray(node)
+        ? node.flatMap(inputs)
+        : typeof node === 'object' && node !== null
+          ? [
+              ...((node as Node).type === 'Input' ? [node as Node] : []),
+              ...inputs((node as Node).children),
+            ]
+          : []
+    const [title, ...others] = inputs(tree)
+
+    expect(others, 'no reply field while renaming').toEqual([])
+    expect(title?.props).toMatchObject({ key: 'title', value: 'API backend', autoFocus: true })
+    expect(textOf(tree)).toContain('⏎ rename · esc cancel')
+
+    const onInput = title?.props?.onInput
+    const onSubmit = title?.props?.onSubmit
+
+    if (typeof onInput === 'function') onInput('API')
+    if (typeof onSubmit === 'function') onSubmit('  API  ')
+
+    expect(calls).toEqual(['typed API', 'title   API  '])
+  })
+
+  test("a conversation's header keeps its title once its silent peer has left", async () => {
+    const resolved = Thread.withDirectory(
+      Thread.withListing(Thread.EMPTY, {
+        peers: [{ name: 'flow-1d', kind: 'interactive', status: 'idle' }],
+      }),
+      [{ id: 'S1', name: 'flow-1d', project: 'claude-flow' }],
+    )
+    const gone = { ...Thread.withListing(resolved, { peers: [] }), selected: 'S1' }
+    const text = textOf(View.paneView(kitOf({ view: 'thread' }).kit, gone))
+
+    expect(text).toContain('claude-flow')
+    expect(text).not.toContain('S1')
+  })
+
+  test('a conversation shows by its title: inbox row, header, its side, the reply field', async () => {
+    const named = Thread.withDirectory(
+      Thread.withListing(Thread.EMPTY, {
+        peers: [{ name: 'flow-1d', kind: 'interactive', status: 'busy' }],
+      }),
+      [{ id: 'S1', name: 'flow-1d', project: 'claude-flow', topic: '#61' }],
+    )
+    const thread = Thread.record(named, { dir: 'in', peer: 'S1', text: 'ready?', at: 3 })
+    const inbox = View.paneView(kitOf().kit, thread)
+
+    expect(textOf(inbox)).toContain('claude-flow · #61')
+    expect(buttonsOf(inbox).map(b => b.props?.key)).toContain('open:S1')
+
+    const conversation = View.paneView(kitOf({ view: 'thread' }).kit, { ...thread, selected: 'S1' })
+    const text = textOf(conversation)
+
+    expect(text).toContain('claude-flow · #61 · busy')
+    expect(text).not.toContain('S1')
   })
 
   test('the next row stops at the ends and starts from the top off a row', async () => {
