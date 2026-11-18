@@ -717,23 +717,22 @@ export const register: Register = on => {
       // once, when it appears or changes in the outbox (a rename made since,
       // here or elsewhere, stands). Not stored, the outbox is read again.
       const keys = publishedKeys()
+      // An entry Herdr took out is forgotten: given again, it applies again.
+      const kept = Object.fromEntries(
+        Object.entries(thread.fromOutbox).filter(([raw]) => Object.hasOwn(outbox.title, raw)),
+      )
       const fresh = Object.entries(outbox.title)
-        .filter(
-          ([raw, title]) =>
-            !Object.hasOwn(thread.fromOutbox, raw) || thread.fromOutbox[raw] !== title,
-        )
+        .filter(([raw, title]) => !Object.hasOwn(kept, raw) || kept[raw] !== title)
         .filter(([raw]) => keys.has(Thread.keyOf(thread, raw)))
       const isTitled = await storeTitles(
         Object.fromEntries(fresh.map(([raw, title]) => [Thread.keyOf(thread, raw), title.trim()])),
       )
+      const fromOutbox = { ...kept, ...Object.fromEntries(fresh) }
 
       if (!isTitled) {
         outboxSeen = ''
-      } else if (fresh.length > 0) {
-        await commit({
-          ...thread,
-          fromOutbox: { ...thread.fromOutbox, ...Object.fromEntries(fresh) },
-        })
+      } else if (JSON.stringify(fromOutbox) !== JSON.stringify(thread.fromOutbox)) {
+        await commit({ ...thread, fromOutbox })
       }
 
       const listed = outbox.send.map(entry => entry.id)

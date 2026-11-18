@@ -5,11 +5,15 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import { OUTBOX_MS, REFRESH_MS } from '../hooks/register'
 import * as Thread from '../hooks/thread'
 import {
+  API_FLOW,
+  API_ID,
+  API_SESSION,
   CROSSTALK,
   FROM_TEAMMATE,
   fromPeer,
   JOURNAL,
   LISTING,
+  NEW_ID,
   PANE,
   SESSION,
   textOf,
@@ -1147,23 +1151,6 @@ describe('herdr', () => {
   })
 })
 
-// The session another Herdr terminal (t3) publishes, listed here as `api`,
-// and its claude-flow file. Session ids are UUIDs, as Claude Code's are.
-const API_ID = '435240f6-183d-456f-84ce-af986698e725'
-const NEW_ID = '6fa2dabb-6acf-4bb4-ae9b-e668e0dfbbd8'
-const API_SESSION = {
-  v: 2,
-  session: { id: API_ID, name: 'api', terminal: 't3', project: 'api-repo' },
-  peers: [],
-  threads: {},
-  handled: {},
-}
-const API_FLOW = {
-  v: 1,
-  workflow: 'me:issue-worktree-pr',
-  steps: [{ id: 'issue', label: 'issue #61', state: 'done' }],
-}
-
 describe('names', () => {
   test('in Herdr, a peer another terminal publishes is filed under its session id', async ($, on) => {
     const w = inHerdr(on)
@@ -1445,5 +1432,35 @@ describe('names', () => {
     await w.clock.settle()
 
     expect(w.store.get('titles')).toEqual({ 'api-v2': 'API backend' })
+  })
+
+  test('a title Herdr took out of its outbox and gives again applies again', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'hi'))
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+    w.outbox({ v: 2 })
+    await w.clock.advance(OUTBOX_MS)
+    w.store.set('titles', { api: 'B' })
+    await w.clock.advance(REFRESH_MS)
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'A' })
+  })
+
+  test('a session in Herdr leaves alone a title given by name to a peer it never talked to', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'T' } })
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.store.get('titles'), 'a session outside Herdr keeps it by name').toEqual({
+      api: 'T',
+    })
+    expect(w.published().peers.find(peer => peer.key === API_ID)?.title).toBe('T')
   })
 })

@@ -361,3 +361,34 @@ export const TO_TEAMMATE = {
 }
 
 export const AT = (iso: string) => Date.parse(iso)
+
+/**
+ * Session ids as Claude Code gives them: UUIDs, kept across `--resume`.
+ */
+export const API_ID = '435240f6-183d-456f-84ce-af986698e725'
+export const NEW_ID = '6fa2dabb-6acf-4bb4-ae9b-e668e0dfbbd8'
+
+/**
+ * What another Herdr terminal (t3) publishes of its session, listed here as
+ * `api`, in the v2 shape a live session wrote (2.1.327).
+ */
+export const API_SESSION = {
+  v: 2,
+  session: { id: API_ID, name: 'api', terminal: 't3', project: 'api-repo' },
+  peers: [],
+  threads: {},
+  handled: {},
+}
+
+/**
+ * That terminal's claude-flow file (`t3.flow.json`), as claude-flow writes
+ * it: a step's label is its id and, once filled in, its detail.
+ */
+export const API_FLOW = {
+  v: 1,
+  workflow: 'me:issue-worktree-pr',
+  steps: [
+    { id: 'issue', label: 'issue #61', state: 'done' },
+    { id: 'branch', label: 'branch', state: 'pending' },
+  ],
+}

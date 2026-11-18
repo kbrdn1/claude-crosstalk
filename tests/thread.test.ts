@@ -205,6 +205,7 @@ describe('thread', () => {
       peers: [{ name: 'api-fd', kind: 'interactive', status: 'idle' }],
     })
 
+    thread = Thread.record(thread, { dir: 'in', peer: 'api-fd', text: 'hi', at: 1 })
     thread = Thread.withTitle(thread, 'api-fd', 'old')
     thread = Thread.withTitle(thread, 'S1', 'given')
     thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-fd' }])
@@ -353,6 +354,30 @@ describe('thread', () => {
       'cloud',
       'background',
     ])
+  })
+
+  test('what is saved of peers is bounded: those talked to, and those listed now', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      {
+        peers: [
+          { name: 'a-1d', kind: 'interactive', status: 'idle' },
+          { name: 'b-2e', kind: 'interactive', status: 'idle' },
+        ],
+      },
+      1,
+    )
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1', name: 'a-1d' },
+      { id: 'S2', name: 'b-2e' },
+    ])
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1', text: 'x', at: 2 })
+
+    const saved = Thread.toSaved(Thread.withListing(thread, { peers: [] }, 3), 4)
+
+    expect(Object.keys(saved.known ?? {})).toEqual(['S1'])
+    expect(Object.keys(saved.seen ?? {})).toEqual(['S1'])
   })
 
   test('what is known of a peer and when it was seen are saved; the name map is not', async () => {

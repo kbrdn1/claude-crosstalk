@@ -253,18 +253,32 @@ function without<V>(record: Readonly<Record<string, V>>, key: string): [Record<s
 function renamed(thread: Thread, from: string, to: string): Thread {
   const [unread, count = 0] = without(thread.unread, from)
   const [titles, title] = without(thread.titles, from)
-  const [seen, at] = without(thread.seen, from)
-  const [known, was] = without(thread.known, from)
+  const moved = movedLocally(thread, from, to)
 
   return {
-    ...thread,
-    entries: thread.entries.map(entry => (entry.peer === from ? { ...entry, peer: to } : entry)),
+    ...moved,
+    entries: thread.entries.some(entry => entry.peer === from)
+      ? thread.entries.map(entry => (entry.peer === from ? { ...entry, peer: to } : entry))
+      : thread.entries,
     unread: count > 0 ? { ...unread, [to]: unreadOf(thread, to) + count } : unread,
     selected: thread.selected === from ? to : thread.selected,
     aliases: Object.fromEntries(
       Object.entries(thread.aliases).map(([address, name]) => [address, name === from ? to : name]),
     ),
     titles: title === undefined || Object.hasOwn(titles, to) ? titles : { ...titles, [to]: title },
+  }
+}
+
+/**
+ * The thread with what it alone keeps of `from` (when it was seen, what is
+ * known of it) moved to `to`: the latest time, `to`'s own knowledge first.
+ */
+function movedLocally(thread: Thread, from: string, to: string): Thread {
+  const [seen, at] = without(thread.seen, from)
+  const [known, was] = without(thread.known, from)
+
+  return {
+    ...thread,
     seen: at === undefined ? seen : { ...seen, [to]: Math.max(at, seen[to] ?? 0) },
     known: was === undefined ? known : { ...known, [to]: { ...was, ...knownOf(thread, to) } },
   }
@@ -418,26 +432,26 @@ export function withDirectory(thread: Thread, sessions: readonly Session[]): Thr
     },
   }
 
+  // A conversation moves whole, its title with it; without one, only what
+  // this session alone keeps: a title in the shared store is left as given.
   for (const { id, name } of named) {
-    if (isFiled(next, name)) {
-      next = renamed(next, name, id)
-    }
+    next = isFiled(next, name) ? renamed(next, name, id) : movedLocally(next, name, id)
   }
 
   return next
 }
 
 /**
- * Whether anything is filed under `key`.
+ * Whether this session has a conversation filed under `key`: messages,
+ * unread, the selection or a socket alias. A title alone is not one: the
+ * store is every session's, and a session outside Herdr files by name.
  */
 function isFiled(thread: Thread, key: string): boolean {
   return (
     thread.selected === key ||
     thread.entries.some(entry => entry.peer === key) ||
     Object.values(thread.aliases).includes(key) ||
-    [thread.unread, thread.titles, thread.seen, thread.known].some(record =>
-      Object.hasOwn(record, key),
-    )
+    Object.hasOwn(thread.unread, key)
   )
 }
 
@@ -547,26 +561,39 @@ function projectOf(thread: Thread, key: string, name: string): string | undefine
  * told apart by their session id's first characters, or else by their names.
  */
 export function titlesOf(thread: Thread, keys: readonly string[]): Record<string, string> {
+  // The title given to the key, else to its name: a session outside Herdr
+  // gives one by name.
+  const givenOf = (key: string, name: string) =>
+    Object.hasOwn(thread.titles, key)
+      ? thread.titles[key]
+      : Object.hasOwn(thread.titles, name)
+        ? thread.titles[name]
+        : undefined
   const derived = keys.map(key => {
     const name = nameOfKey(thread, key)
     const base = projectOf(thread, key, name) ?? name
     const { topic } = knownOf(thread, key)
 
-    return { key, name, title: topic === undefined ? base : `${base} · ${topic}` }
+    return {
+      key,
+      name,
+      given: givenOf(key, name),
+      title: topic === undefined ? base : `${base} · ${topic}`,
+    }
   })
   const counts = new Map<string, number>()
 
-  for (const { key, title } of derived) {
-    if (!Object.hasOwn(thread.titles, key)) counts.set(title, (counts.get(title) ?? 0) + 1)
+  for (const { given, title } of derived) {
+    if (given === undefined) counts.set(title, (counts.get(title) ?? 0) + 1)
   }
 
   return Object.fromEntries(
-    derived.map(({ key, name, title }) => {
+    derived.map(({ key, name, given, title }) => {
       const isSession = Object.hasOwn(thread.known, key) && key !== name
       const twin = (counts.get(title) ?? 0) > 1
       const told = !twin ? title : isSession ? `${title} · ${key.slice(0, 4)}` : name
 
-      return [key, Object.hasOwn(thread.titles, key) ? (thread.titles[key] ?? told) : told]
+      return [key, given ?? told]
     }),
   )
 }
@@ -636,13 +663,18 @@ export function unreadCount(thread: Thread): number {
  * What to keep in `$.store`.
  */
 export function toSaved(thread: Thread, now: number): Saved {
+  // What is known of peers stays bounded: those talked to (the messages are
+  // capped), and those listed now.
+  const kept = new Set(keysOf(thread, [...new Set(thread.entries.map(entry => entry.peer))]))
+  const bounded = <V>(record: Readonly<Record<string, V>>) =>
+    Object.fromEntries(Object.entries(record).filter(([key]) => kept.has(key)))
   const saved = {
     savedAt: now,
     entries: [...thread.entries],
     aliases: { ...thread.aliases },
     handled: { ...thread.handled },
-    known: { ...thread.known },
-    seen: { ...thread.seen },
+    known: bounded(thread.known),
+    seen: bounded(thread.seen),
     fromOutbox: { ...thread.fromOutbox },
   }
 
