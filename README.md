@@ -290,9 +290,16 @@ half of one.
   plugin's store by key, shared by every session, across renames and
   restarts. A v1 outbox (no `title`, `to` and `read` by name) is still read.
 
-Known limit: a session name is its folder's plus two hex digits, so names
+A title given by name (from a session outside Herdr) stays under that
+name in the store, and shows for whichever session holds the name; it
+moves to a session id only with a conversation that resolves.
+
+Known limits: a session name is its folder's plus two hex digits, so names
 come back. A conversation still filed under a name (one that never
 resolved) joins whichever session holds that name when it first resolves.
+Nothing tells a live terminal's publication from one a closed terminal
+left behind: a session that publishes nothing (outside Herdr) under a
+name such a file still claims is taken for that file's session.
 
 A send the recipient holds for approval (the two sessions run in different
 permission modes) still shows as `sent`: the engine tells this session in a
