@@ -46,6 +46,8 @@ function world(
   const open: { result: UiOpenResult } = { result: { isPlaced: true } }
   // How `mv` exits: 0 moves the file.
   const mv = { exitCode: 0 }
+  // How many reads fail next, and what a read waits for first.
+  const reads: { failing: number; held?: Promise<void> } = { failing: 0 }
   let version = 0
 
   const clock = mock.clock(on)
@@ -61,10 +63,17 @@ function world(
 
     return { value: undefined }
   })
-  on('fs.read', ($, e) => {
+  on('fs.read', async ($, e) => {
     fsCalls.push(`read ${e.path}`)
+    await reads.held
 
     const file = files.get(e.path)
+
+    if (reads.failing > 0) {
+      reads.failing -= 1
+
+      return missing
+    }
 
     return file === undefined ? missing : { value: file.text }
   })
@@ -167,6 +176,7 @@ function world(
     clock,
     open,
     mv,
+    reads,
     // Herdr writing its outbox, as a new file each time.
     outbox: (value: unknown) =>
       files.set(OUTBOX, { text: JSON.stringify(value), mtimeMs: ++version }),
@@ -743,6 +753,68 @@ describe('herdr', () => {
     await w.clock.advance(OUTBOX_MS)
 
     expect(w.sent).toHaveLength(send.length)
+  })
+
+  test('an outbox that could not be read is read again, unchanged', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.reads.failing = 1
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'hi' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent).toEqual([])
+
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent).toHaveLength(1)
+  })
+
+  test('one look at the outbox at a time: a slow read never sends twice', async ($, on) => {
+    const w = inHerdr(on)
+    let release = () => {}
+
+    await $.session.start(SESSION)
+    w.reads.held = new Promise(resolve => {
+      release = resolve
+    })
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'hi' }] })
+    await w.clock.advance(OUTBOX_MS)
+    await w.clock.advance(OUTBOX_MS)
+    w.reads.held = undefined
+    release()
+    await w.clock.settle()
+
+    expect(w.sent).toHaveLength(1)
+  })
+
+  test('a reply from Herdr keeps the reader where they scrolled back to', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+
+    for (let i = 0; i < 30; i++) {
+      await $.session.receive(fromPeer('api', `message ${i}`))
+    }
+
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({
+      plugin: 'crosstalk',
+      ...PANE,
+      surface: 'terminal' as const,
+      props: { ...PANE.props, scroll: { offset: 0, bodyRows: 16 } },
+    })
+
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
+    await ui.press({ key: 'older' })
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'from herdr' }] })
+    await w.clock.advance(OUTBOX_MS)
+    await ui.redraw()
+
+    expect(w.sent).toHaveLength(1)
+    expect(textOf(await ui.drawn()), 'still scrolled back').not.toContain('from herdr')
   })
 
   test('a second start looks at the outbox once a period still', async ($, on) => {
