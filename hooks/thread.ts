@@ -45,6 +45,9 @@ export type Thread = {
   titles: Readonly<Record<string, string>>
   // When ListAgents last listed each key.
   seen: Readonly<Record<string, number>>
+  // The titles Herdr's outbox gave, by the key it wrote them under: each
+  // applies once, when it appears or changes, not at every read.
+  fromOutbox: Readonly<Record<string, string>>
 }
 
 /**
@@ -87,6 +90,7 @@ export type Saved = {
   handled?: Record<string, Handled>
   known?: Record<string, Known>
   seen?: Record<string, number>
+  fromOutbox?: Record<string, string>
 }
 
 export const EMPTY: Thread = {
@@ -99,6 +103,7 @@ export const EMPTY: Thread = {
   known: {},
   titles: {},
   seen: {},
+  fromOutbox: {},
 }
 
 // A session's name is its folder's and two hex digits of its own.
@@ -638,6 +643,7 @@ export function toSaved(thread: Thread, now: number): Saved {
     handled: { ...thread.handled },
     known: { ...thread.known },
     seen: { ...thread.seen },
+    fromOutbox: { ...thread.fromOutbox },
   }
 
   return thread.selected === undefined ? saved : { ...saved, selected: thread.selected }
@@ -717,7 +723,12 @@ export function fromSaved(value: unknown): Thread | undefined {
       (pair): pair is [string, number] => typeof pair[1] === 'number',
     ),
   )
-  const thread = { ...EMPTY, entries, aliases, handled, known, seen }
+  const fromOutbox = Object.fromEntries(
+    Object.entries(isRecord(value.fromOutbox) ? value.fromOutbox : {}).filter(
+      (pair): pair is [string, string] => typeof pair[1] === 'string',
+    ),
+  )
+  const thread = { ...EMPTY, entries, aliases, handled, known, seen, fromOutbox }
 
   return typeof value.selected === 'string' ? { ...thread, selected: value.selected } : thread
 }

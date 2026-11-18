@@ -150,6 +150,7 @@ function kitOf(overrides: Partial<View.Kit> = {}) {
     onInsert: () => calls.push('insert'),
     onClose: () => calls.push('close'),
     onRename: () => calls.push('rename'),
+    onTitleInput: text => calls.push(`typed ${text}`),
     onTitle: title => calls.push(`title ${title}`),
     ...overrides,
   }
@@ -242,9 +243,14 @@ describe('vim keys', () => {
     ])
   })
 
-  test('rename mode asks the title in place of the reply, its current one in it', async () => {
-    const { kit, calls } = kitOf({ view: 'thread', mode: 'rename', home: 'title' })
-    const thread = Thread.withTitle({ ...THREAD, selected: 'api' }, 'api', 'API backend')
+  test('rename mode asks the title in place of the reply, what was typed kept in it', async () => {
+    const { kit, calls } = kitOf({
+      view: 'thread',
+      mode: 'rename',
+      home: 'title',
+      titleDraft: 'API backend',
+    })
+    const thread = Thread.withTitle({ ...THREAD, selected: 'api' }, 'api', 'stored')
     const tree = View.paneView(kit, thread)
     const inputs = (node: unknown): Node[] =>
       Array.isArray(node)
@@ -261,11 +267,27 @@ describe('vim keys', () => {
     expect(title?.props).toMatchObject({ key: 'title', value: 'API backend', autoFocus: true })
     expect(textOf(tree)).toContain('⏎ rename · esc cancel')
 
+    const onInput = title?.props?.onInput
     const onSubmit = title?.props?.onSubmit
 
+    if (typeof onInput === 'function') onInput('API')
     if (typeof onSubmit === 'function') onSubmit('  API  ')
 
-    expect(calls).toEqual(['title   API  '])
+    expect(calls).toEqual(['typed API', 'title   API  '])
+  })
+
+  test("a conversation's header keeps its title once its silent peer has left", async () => {
+    const resolved = Thread.withDirectory(
+      Thread.withListing(Thread.EMPTY, {
+        peers: [{ name: 'flow-1d', kind: 'interactive', status: 'idle' }],
+      }),
+      [{ id: 'S1', name: 'flow-1d', project: 'claude-flow' }],
+    )
+    const gone = { ...Thread.withListing(resolved, { peers: [] }), selected: 'S1' }
+    const text = textOf(View.paneView(kitOf({ view: 'thread' }).kit, gone))
+
+    expect(text).toContain('claude-flow')
+    expect(text).not.toContain('S1')
   })
 
   test('a conversation shows by its title: inbox row, header, its side, the reply field', async () => {

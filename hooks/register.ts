@@ -166,6 +166,8 @@ export const register: Register = on => {
   let replying: string | undefined
   // What the person has typed in each conversation's reply field so far.
   const drafts = new Map<string, string>()
+  // The title being typed in rename mode: a redraw keeps it.
+  let titleDraft = ''
   // How many messages the thread is scrolled back from its newest one.
   let back = 0
   // Why the last reply did not go, shown in the pane until the next one.
@@ -434,12 +436,17 @@ export const register: Register = on => {
    * clears), over what the store holds now: another session's titles stay.
    */
   function storeTitles(changes: Readonly<Record<string, string>>): Promise<boolean> {
+    // Nothing to change waits for nothing.
+    if (Object.keys(changes).length === 0) {
+      return Promise.resolve(true)
+    }
+
     // One change at a time: two would each read the store, and the last to
     // write would undo the other.
     const run = titling.then(async () => {
       const via = host
 
-      if (via === undefined || Object.keys(changes).length === 0) {
+      if (via === undefined) {
         return true
       }
 
@@ -474,6 +481,17 @@ export const register: Register = on => {
     titling = run.catch(() => false)
 
     return run
+  }
+
+  /**
+   * Every key the publication lists: each conversation's, each listed
+   * session's.
+   */
+  function publishedKeys(): Set<string> {
+    return new Set([
+      ...Thread.conversationsOf(thread).map(c => c.peer),
+      ...thread.peers.map(listed => Thread.keyOf(thread, listed.name)),
+    ])
   }
 
   /**
@@ -622,11 +640,8 @@ export const register: Register = on => {
 
     const at = await host.now()
     const message = text.trim()
-    // Every peer the publication lists, by key; `to` is a key or a name.
-    const keys = new Set([
-      ...Thread.conversationsOf(thread).map(c => c.peer),
-      ...thread.peers.map(listed => Thread.keyOf(thread, listed.name)),
-    ])
+    // `to` is a key or a live name of a published peer.
+    const keys = publishedKeys()
     const key = keys.has(to) ? to : Thread.keyOf(thread, to)
     const refusal = !keys.has(key)
       ? `unknown peer: ${to}`
@@ -698,21 +713,27 @@ export const register: Register = on => {
         redraw()
       }
 
-      // The titles Herdr gives, by key or name; only those that change. Not
-      // stored, the outbox is read again at the next look.
+      // The titles Herdr gives, by key or live name of a published peer: each
+      // once, when it appears or changes in the outbox (a rename made since,
+      // here or elsewhere, stands). Not stored, the outbox is read again.
+      const keys = publishedKeys()
+      const fresh = Object.entries(outbox.title)
+        .filter(
+          ([raw, title]) =>
+            !Object.hasOwn(thread.fromOutbox, raw) || thread.fromOutbox[raw] !== title,
+        )
+        .filter(([raw]) => keys.has(Thread.keyOf(thread, raw)))
       const isTitled = await storeTitles(
-        Object.fromEntries(
-          Object.entries(outbox.title)
-            .map(([peer, title]) => [Thread.keyOf(thread, peer), title.trim()] as const)
-            .filter(
-              ([key, title]) =>
-                (Object.hasOwn(thread.titles, key) ? thread.titles[key] : '') !== title,
-            ),
-        ),
+        Object.fromEntries(fresh.map(([raw, title]) => [Thread.keyOf(thread, raw), title.trim()])),
       )
 
       if (!isTitled) {
         outboxSeen = ''
+      } else if (fresh.length > 0) {
+        await commit({
+          ...thread,
+          fromOutbox: { ...thread.fromOutbox, ...Object.fromEntries(fresh) },
+        })
       }
 
       const listed = outbox.send.map(entry => entry.id)
@@ -850,9 +871,13 @@ export const register: Register = on => {
     // Filed under the sender's session id when Herdr's directory knows it.
     const peer = Thread.senderOf(thread, name, address)
     const known = Thread.withAlias(thread, address, peer)
+    // A session renamed at the same socket takes its title along: in the
+    // store too, or the next read would put the old one back.
+    const moved = titleChanges(thread.titles, known.titles)
 
     holdPlace(peer)
     await commit(Thread.record(known, { dir: 'in', peer, text, at }, isReading(peer)))
+    await storeTitles(moved)
 
     return next(e)
   })
@@ -1022,14 +1047,24 @@ export const register: Register = on => {
         // The legend that held the keys goes with the mode: they are asked
         // back once the title field is drawn, as on a view switch.
         onRename: () => {
+          const key = thread.selected ?? ''
+
           mode = 'rename'
+          titleDraft = Object.hasOwn(thread.titles, key) ? (thread.titles[key] ?? '') : ''
           host?.invalidate()
           refocus('title')
+        },
+        titleDraft,
+        onTitleInput: text => {
+          titleDraft = text
+          host?.invalidate()
         },
         onTitle: title => {
           const key = thread.selected
 
           mode = 'normal'
+          titleDraft = ''
+          host?.invalidate()
           refocus('back')
 
           if (key !== undefined) void storeTitles({ [key]: title.trim() })

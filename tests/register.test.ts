@@ -1384,4 +1384,66 @@ describe('names', () => {
 
     expect((await ui.find({ key: 'reply' }))?.props.value).toBe('half a thought')
   })
+
+  test("Herdr's title applies once, when it appears or changes, not at each read", async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'hi'))
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'A' })
+
+    // Renamed since, from another session (or with r).
+    w.store.set('titles', { api: 'B' })
+    await w.clock.advance(REFRESH_MS)
+    w.outbox({ v: 2, title: { api: 'A' }, read: { api: 0 } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles'), 'the same title read again undoes nothing').toEqual({
+      api: 'B',
+    })
+
+    w.outbox({ v: 2, title: { api: 'C' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'C' })
+  })
+
+  test("a title Herdr's outbox already gave is not given again after a reload", async ($, on) => {
+    const saved = Thread.toSaved({ ...Thread.EMPTY, fromOutbox: { api: 'A' } }, 1)
+    const w = inHerdr(on, { 'thread:s1': saved, titles: { api: 'B' } })
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, title: { api: 'A' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ api: 'B' })
+  })
+
+  test('a title for no published peer is not stored', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, title: { nobody: 'X' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toBeUndefined()
+  })
+
+  test('a peer renamed at the same socket takes its stored title along', async ($, on) => {
+    const w = world(on, [], { titles: { 'api-3e': 'API backend' } })
+    const from = (name: string, text: string) => ({
+      origin: { kind: 'peer' as const },
+      text: `<cross-session-message from="uds:/tmp/1.sock" from-name="${name}">${text}</cross-session-message>`,
+    })
+
+    await $.session.start(SESSION)
+    await $.session.receive(from('api-3e', 'one'))
+    await $.session.receive(from('api-v2', 'two'))
+    await w.clock.settle()
+
+    expect(w.store.get('titles')).toEqual({ 'api-v2': 'API backend' })
+  })
 })

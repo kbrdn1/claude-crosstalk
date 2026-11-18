@@ -43,8 +43,10 @@ export type Kit = {
   onBack: (by: number) => void
   onInput: (text: string) => void
   onSubmit: (text: string) => void
-  // Normal mode's `r`, and the title typed for the open conversation.
+  // Normal mode's `r`, the title being typed, and the one entered.
   onRename: () => void
+  titleDraft?: string
+  onTitleInput: (text: string) => void
   onTitle: (title: string) => void
 }
 
@@ -513,6 +515,7 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
   const badge = elsewhere > 0 ? `✉ ${elsewhere}` : ''
   const title =
     Thread.conversationsOf(thread).find(conversation => conversation.peer === selected)?.title ??
+    Thread.titlesOf(thread, [selected])[selected] ??
     selected
   const name = fitName(
     title,
@@ -586,7 +589,8 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
             placeholder={`a title for ${title}…`}
             submitLabel="rename"
             {...(kit.home === 'title' ? { autoFocus: true as const } : {})}
-            value={Object.hasOwn(thread.titles, selected) ? (thread.titles[selected] ?? '') : ''}
+            value={kit.titleDraft ?? ''}
+            onInput={value => kit.onTitleInput(value)}
             onSubmit={value => kit.onTitle(value)}
           />
         ) : (
