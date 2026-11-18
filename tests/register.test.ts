@@ -1219,4 +1219,55 @@ describe('names', () => {
 
     expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe('S-new')
   })
+
+  test('a title from Herdr is kept in the shared store and published; empty, it clears', async ($, on) => {
+    const w = inHerdr(on, { titles: { 'S-other': 'kept' } })
+    const titleOf = () => w.published().peers.find(peer => peer.key === 'api')?.title
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, title: { api: 'API backend' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles'), "another session's title kept").toEqual({
+      'S-other': 'kept',
+      api: 'API backend',
+    })
+    expect(titleOf()).toBe('API backend')
+
+    w.outbox({ v: 2, title: { api: '' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ 'S-other': 'kept' })
+    expect(titleOf()).toBe('api')
+  })
+
+  test('a title another session gave shows here, at the next listing too', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'from elsewhere' } })
+    const titleOf = () => w.published().peers.find(peer => peer.key === 'api')?.title
+
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(titleOf()).toBe('from elsewhere')
+
+    w.store.set('titles', { api: 'renamed elsewhere' })
+    await w.clock.advance(REFRESH_MS)
+
+    expect(titleOf()).toBe('renamed elsewhere')
+  })
+
+  test('a conversation that resolves takes its title along, in the store too', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'API backend' } })
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await w.clock.advance(REFRESH_MS)
+
+    expect(w.store.get('titles')).toEqual({ 'S-api': 'API backend' })
+    expect(w.published().peers.find(peer => peer.name === 'api')).toMatchObject({
+      key: 'S-api',
+      title: 'API backend',
+    })
+  })
 })

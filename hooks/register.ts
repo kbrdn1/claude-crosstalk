@@ -41,6 +41,9 @@ const ROW_PREFIX = 'open:'
 // One store key a session: `thread:<session id>`.
 const STORE_PREFIX = 'thread:'
 
+// The titles the person gave, by key, shared by every session.
+const TITLES_KEY = 'titles'
+
 // ponytail: the 50 most recent sessions' threads stay in the store, the
 // rest go at a start; a size cap if a session's thread grows past use.
 export const MAX_SESSIONS = 50
@@ -61,6 +64,8 @@ type Host = {
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
+  titles: () => Promise<unknown>
+  saveTitles: (value: Record<string, string>) => Promise<void>
   read: (path: string) => Promise<string>
   write: (path: string, text: string) => Promise<void>
   stat: (path: string) => Promise<FsStat>
@@ -422,6 +427,44 @@ export const register: Register = on => {
     return [...sessions.values()]
   }
 
+  /**
+   * Changes the shared titles by `changes` (key to title, an empty one
+   * clears), over what the store holds now: another session's titles stay.
+   */
+  async function storeTitles(changes: Readonly<Record<string, string>>): Promise<void> {
+    const via = host
+
+    if (via === undefined || Object.keys(changes).length === 0) {
+      return
+    }
+
+    const stored = Thread.withTitles(thread, await via.titles().catch(() => undefined)).titles
+    const titles = Object.fromEntries(
+      Object.entries({ ...stored, ...changes }).filter(([, title]) => title !== ''),
+    )
+
+    await via.saveTitles(titles).catch(() => undefined)
+    thread = Thread.withTitles(thread, titles)
+    redraw()
+  }
+
+  /**
+   * What turns `before`'s titles into `after`'s: each key set or cleared.
+   */
+  function titleChanges(
+    before: Readonly<Record<string, string>>,
+    after: Readonly<Record<string, string>>,
+  ): Record<string, string> {
+    return Object.fromEntries([
+      ...Object.keys(before)
+        .filter(key => !Object.hasOwn(after, key))
+        .map(key => [key, '']),
+      ...Object.entries(after).filter(
+        ([key, title]) => !Object.hasOwn(before, key) || before[key] !== title,
+      ),
+    ])
+  }
+
   async function refreshPeers(): Promise<void> {
     const result = await host?.call({ tool: 'ListAgents' }).catch(() => undefined)
     const record: unknown = result?.result
@@ -434,9 +477,18 @@ export const register: Register = on => {
 
     const at = await host.now()
     const sessions = herdr === undefined ? undefined : await readDirectory()
+    // Titles another session gave since.
+    const stored = await host.titles().catch(() => undefined)
     // The thread read after every wait: nothing that landed meanwhile is lost.
-    const listed = Thread.withListing(thread, Thread.listingOf(listing), at)
+    const listed = Thread.withListing(
+      Thread.withTitles(thread, stored),
+      Thread.listingOf(listing),
+      at,
+    )
     const next = sessions === undefined ? listed : Thread.withDirectory(listed, sessions)
+
+    // A title that moved with its conversation moves in the store too.
+    await storeTitles(titleChanges(listed.titles, next.titles))
 
     if (next.entries !== listed.entries) {
       // A conversation moved to its session id: kept for the next start.
@@ -602,6 +654,18 @@ export const register: Register = on => {
         redraw()
       }
 
+      // The titles Herdr gives, by key or name; only those that change.
+      await storeTitles(
+        Object.fromEntries(
+          Object.entries(outbox.title)
+            .map(([peer, title]) => [Thread.keyOf(thread, peer), title.trim()] as const)
+            .filter(
+              ([key, title]) =>
+                (Object.hasOwn(thread.titles, key) ? thread.titles[key] : '') !== title,
+            ),
+        ),
+      )
+
       const listed = outbox.send.map(entry => entry.id)
 
       for (const entry of outbox.send) {
@@ -665,6 +729,8 @@ export const register: Register = on => {
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
+      titles: () => $.store.get(TITLES_KEY),
+      saveTitles: value => $.store.set(TITLES_KEY, value),
       read: path => $.fs.read(path),
       write: (path, text) => $.fs.write(path, text),
       stat: path => $.fs.stat(path),
@@ -693,6 +759,9 @@ export const register: Register = on => {
 
       redraw()
     }
+
+    // The titles every session shares.
+    thread = Thread.withTitles(thread, await host.titles().catch(() => undefined))
 
     await prune($).catch(() => undefined)
 
