@@ -138,21 +138,47 @@ half of one.
 
 ```json
 {
-  "v": 1,
-  "session": { "id": "<session id>", "name": "claude-98" },
+  "v": 2,
+  "session": {
+    "id": "<session id>",
+    "name": "claude-crosstalk-73",
+    "terminal": "t9",
+    "cwd": "/Users/me/Projects/claude-crosstalk",
+    "project": "claude-crosstalk"
+  },
   "updatedAt": 1794974115192,
   "peers": [
     {
-      "name": "api",
-      "address": "api",
-      "status": "idle",
+      "key": "435240f6-183d-456f-84ce-af986698e725",
+      "sessionId": "435240f6-183d-456f-84ce-af986698e725",
+      "title": "claude-flow · #61",
+      "name": "claude-flow-1d",
+      "address": "claude-flow-1d",
+      "project": "claude-flow",
+      "topic": "#61",
+      "kind": "interactive",
+      "status": "busy",
+      "live": true,
+      "lastSeenAt": 1794974110000,
+      "lastMessageAt": 1794974115000,
       "unread": 1,
       "last": { "dir": "in", "text": "**ready?**", "at": 1794974115000 }
     },
-    { "name": "web", "address": "web", "status": "busy", "unread": 0 }
+    {
+      "key": "laptop-bubble",
+      "title": "laptop-bubble",
+      "name": "laptop-bubble",
+      "address": "laptop-bubble",
+      "project": "laptop-bubble",
+      "kind": "remote",
+      "status": "offline",
+      "live": true,
+      "lastSeenAt": 1794974110000,
+      "unread": 0
+    }
   ],
   "threads": {
-    "api": [
+    "435240f6-183d-456f-84ce-af986698e725": [
       { "dir": "out", "text": "on it", "at": 1794974100000, "id": "<outbox id>" },
       { "dir": "in", "text": "**ready?**", "at": 1794974115000 }
     ]
@@ -166,16 +192,38 @@ half of one.
 
 - `session.name` is the name `ListAgents` gives this session; absent until
   it answered. In Herdr, `ListAgents` runs at the start and every 15 seconds,
-  pane open or not.
+  pane open or not. `project` is the name of the repository's main working
+  tree (a worktree's session shares it), else of `cwd`.
 - `updatedAt` is when what the file says last changed, not a heartbeat: an
   idle session leaves it as it was.
-- `peers` are the inbox's rows, most recent first: every conversation, then
-  each idle local session nobody talked to (no `last`). `address` is where
-  crosstalk sends a reply; the outbox's `to` takes the `name`. `status` and
-  `at` are absent where unknown.
-- `threads` holds each conversation's messages, oldest first, text as sent
-  (Markdown); 200 messages at most across the session. `id` is on a message
-  sent from Herdr's outbox only.
+- `peers` are every conversation, most recent first, then every session
+  `ListAgents` lists that nobody talked to, of every kind. Fields unknown
+  are absent, never made up.
+- `key` is what a conversation is filed under: the peer's session id when
+  it resolves, else its live name. A session id survives `--resume`; a name
+  does not (a new suffix at each start). It resolves in Herdr only: at each
+  `ListAgents`, crosstalk reads the other terminals' publications and maps
+  each listed name to the `session.id` that publishes it. When a name
+  resolves to an id already known, its conversation joins that one, title
+  and unread with it; a key can so change once, from a name to an id
+  (follow it by `name`). Outside Herdr a conversation stays filed by name,
+  joined across a rename only by the socket a peer writes from.
+- `title` is what to call it: the title the person gave, else
+  `project · topic`, else `project`, else the name. Two sessions of one
+  project without a topic are told apart by their id's first characters.
+  `project` comes from the peer's publication, else its name without the
+  random suffix (`claude-flow-1d` gives `claude-flow`); `topic` from its
+  terminal's claude-flow file (its issue, else its branch), in Herdr only.
+- `name` is the live name (or the last known); `address` is where crosstalk
+  sends a reply.
+- `kind` is `interactive`, `remote` (Remote Control), `cloud` or
+  `background`, and `status` `busy`, `waiting`, `idle` or `offline`, as
+  `ListAgents` gives them. `live` says whether the last `ListAgents` listed
+  it, `lastSeenAt` when one last did: both lag up to 15 seconds.
+  `lastMessageAt` is the last message, in or out.
+- `threads` holds each conversation's messages by `key`, oldest first, text
+  as sent (Markdown); 200 messages at most across the session. `id` is on a
+  message sent from Herdr's outbox only.
 - `handled` is what became of each outbox entry: `sent`, or `refused` with
   the reason. It keeps every id the outbox still lists; past 200 ids in all,
   the oldest of the others go. A refused send is in no thread, as in the
@@ -186,17 +234,18 @@ half of one.
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "session": "<the publication's session.id>",
-  "send": [{ "id": "<uuid>", "to": "api", "text": "on it", "at": 1794974100000 }],
-  "read": { "api": 1794974115000 }
+  "send": [{ "id": "<uuid>", "to": "<a peer's key>", "text": "on it", "at": 1794974100000 }],
+  "read": { "<a peer's key>": 1794974115000 },
+  "title": { "<a peer's key>": "API backend" }
 }
 ```
 
 - crosstalk looks at the file every second (its mtime and size) and reads it
   only when it changed.
-- An outbox whose `v` is not 1, or whose `session` names another session,
-  asks nothing. Herdr always sets `session`, so a new session in the same
+- An outbox whose `v` is not 1 or 2, or whose `session` names another
+  session, asks nothing. Herdr always sets `session`, so a new session in the same
   terminal never acts on what was written for the one before; an outbox
   without it is taken by whichever session of the terminal reads it.
 - Each `send` entry goes out once per `id`, the way the pane's reply does:
@@ -206,14 +255,22 @@ half of one.
   comes back `sent` when its message made it into the thread, else
   `refused` (it may have gone).
 - `at` is Herdr's own: crosstalk times a message when it sends it.
-- `to` must be the `name` of one of the published `peers`, and `text` must
-  say something: otherwise the entry is refused and nothing is sent. Nothing
-  else in the file runs anything.
+- `to` must be the `key` (or the `name`) of one of the published `peers`,
+  and `text` must say something: otherwise the entry is refused and nothing
+  is sent. Nothing else in the file runs anything.
 - Herdr drops an entry from `send` once its id is in `handled`; one left
   there is never sent again.
 - `read` marks a conversation read up to a time: its published `unread`, and
   the status line, then count only what came in after it. Opening the
   conversation in the pane reads it too.
+- `title` gives a conversation a title by `key` (v2); an empty one clears
+  it. Titles are kept in the plugin's store by key, shared by every session,
+  across renames and restarts; `r` in the pane does the same. A v1 outbox
+  (no `title`, `to` and `read` by name) is still read.
+
+Known limit: a session name is its folder's plus two hex digits, so names
+come back. A conversation still filed under a name (one that never
+resolved) joins whichever session holds that name when it first resolves.
 
 A send the recipient holds for approval (the two sessions run in different
 permission modes) still shows as `sent`: the engine tells this session in a

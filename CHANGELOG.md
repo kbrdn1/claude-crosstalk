@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the pane's reply field does; Herdr's read marks clear the unread count.
   Outside Herdr nothing changes. The protocol is in the README's Herdr
   section (#7).
+- **Stable names**: in Herdr, a conversation is filed under its peer's
+  session id, which survives a restart, so a renamed session keeps one
+  thread; each conversation has a title (the one given, else project and
+  topic, else project), set from the pane with `r` or from Herdr, shared by
+  every session (#10).
+
+### Changed
+
+- **Herdr publication v2**: `threads` are keyed by a stable `key`, and each
+  peer carries `key`, `title`, `project`, `topic`, `kind`, `status`,
+  `live`, `lastSeenAt` and `lastMessageAt`; every listed session is
+  published. The outbox gains `title`; a v1 outbox is still read (#10).
 
 ## Past releases
 
