@@ -187,6 +187,21 @@ describe('thread', () => {
     expect(thread.handled['id-7']).toEqual({ status: 'sent', at: 7 })
   })
 
+  test("a peer named like an object's own member is published as any other", async () => {
+    let thread = Thread.EMPTY
+
+    for (const peer of ['constructor', '__proto__', 'toString']) {
+      thread = Thread.record(thread, { dir: 'out', peer, text: `to ${peer}`, at: 1 })
+    }
+
+    const threads = Thread.herdrOf(thread, 's1', 0).threads
+
+    expect(Object.keys(threads)).toEqual(['constructor', '__proto__', 'toString'])
+    expect(Object.getOwnPropertyDescriptor(threads, '__proto__')?.value).toEqual([
+      { dir: 'out', text: 'to __proto__', at: 1 },
+    ])
+  })
+
   test('handled ids are saved; one a reload cut off mid-send comes back refused', async () => {
     let thread = Thread.record(Thread.EMPTY, {
       dir: 'out',

@@ -564,10 +564,11 @@ function herdrMessageOf({ dir, text, at, id }: Entry): HerdrMessage {
  * (a pending one is not one yet).
  */
 export function herdrOf(thread: Thread, id: string, updatedAt: number): Publication {
-  const threads: Record<string, HerdrMessage[]> = {}
+  // A Map, not an object: a peer may be named `constructor` or `__proto__`.
+  const threads = new Map<string, HerdrMessage[]>()
 
   for (const entry of thread.entries) {
-    ;(threads[entry.peer] ??= []).push(herdrMessageOf(entry))
+    threads.set(entry.peer, [...(threads.get(entry.peer) ?? []), herdrMessageOf(entry)])
   }
 
   return {
@@ -581,7 +582,7 @@ export function herdrOf(thread: Thread, id: string, updatedAt: number): Publicat
       unread,
       ...(last === undefined ? {} : { last: { ...herdrMessageOf(last), id: undefined } }),
     })),
-    threads,
+    threads: Object.fromEntries(threads),
     handled: Object.fromEntries(
       Object.entries(thread.handled).filter(([, result]) => result.status !== 'pending'),
     ),
