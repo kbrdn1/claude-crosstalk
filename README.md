@@ -174,8 +174,9 @@ half of one.
   (Markdown); 200 messages at most across the session. `id` is on a message
   sent from Herdr's outbox only.
 - `handled` is what became of each outbox entry: `sent`, or `refused` with
-  the reason. It keeps every id the outbox still lists, and the 200 most
-  recent of the others. A refused send is in no thread, as in the pane.
+  the reason. It keeps every id the outbox still lists; past 200 ids in all,
+  the oldest of the others go. A refused send is in no thread, as in the
+  pane.
 
 **Outbox**, written by Herdr only (write beside, then rename):
 `~/.claude/cache/herdr/<HC_TERMINAL_ID>.crosstalk-outbox.json`.
