@@ -224,6 +224,14 @@ export function listingOf(text: string): { self?: string; peers: Peer[] } {
 }
 
 /**
+ * How many of `peer`'s messages wait unread: its own count only, since a
+ * peer may be named `constructor` or `toString`.
+ */
+function unreadOf(thread: Thread, peer: string): number {
+  return Object.hasOwn(thread.unread, peer) ? (thread.unread[peer] ?? 0) : 0
+}
+
+/**
  * The thread with one more message. An incoming one counts as unread unless
  * its conversation is on screen; the first message selects its conversation.
  */
@@ -237,7 +245,7 @@ export function record(thread: Thread, entry: Entry, isShown = false): Thread {
     entries: [...thread.entries, entry].slice(-MAX_ENTRIES),
     unread: isSeen
       ? thread.unread
-      : { ...thread.unread, [entry.peer]: (thread.unread[entry.peer] ?? 0) + 1 },
+      : { ...thread.unread, [entry.peer]: unreadOf(thread, entry.peer) + 1 },
   }
 }
 
@@ -277,7 +285,7 @@ export function conversationsOf(thread: Thread): Conversation[] {
     byPeer.set(entry.peer, {
       peer: entry.peer,
       status: statusOf.get(entry.peer),
-      unread: thread.unread[entry.peer] ?? 0,
+      unread: unreadOf(thread, entry.peer),
       last: entry,
     })
   }
@@ -528,7 +536,8 @@ export function readUpTo(thread: Thread, peer: string, at: number): Thread {
   const after = thread.entries.filter(
     entry => entry.peer === peer && entry.dir === 'in' && (entry.at ?? 0) > at,
   ).length
-  const { [peer]: count = 0, ...unread } = thread.unread
+  const { [peer]: _count, ...unread } = thread.unread
+  const count = unreadOf(thread, peer)
   const left = Math.min(count, after)
 
   return left === count

@@ -202,6 +202,23 @@ describe('thread', () => {
     ])
   })
 
+  test("a peer named like an object's own member counts its unread as any other", async () => {
+    let thread = Thread.EMPTY
+
+    thread = Thread.record(thread, { dir: 'in', peer: 'constructor', text: 'a', at: 1 })
+    thread = Thread.record(thread, { dir: 'in', peer: 'constructor', text: 'b', at: 2 })
+
+    expect(Thread.unreadCount(thread)).toBe(2)
+    expect(Thread.herdrOf(Thread.readUpTo(thread, 'constructor', 1), 's1', 0).peers).toEqual([
+      {
+        name: 'constructor',
+        address: 'constructor',
+        unread: 1,
+        last: { dir: 'in', text: 'b', at: 2 },
+      },
+    ])
+  })
+
   test('a pending id whose message is in the thread comes back sent', async () => {
     let thread = Thread.record(Thread.EMPTY, {
       dir: 'out',
