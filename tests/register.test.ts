@@ -48,6 +48,8 @@ function world(
   const mv = { exitCode: 0 }
   // How many reads fail next, and what a read waits for first.
   const reads: { failing: number; held?: Promise<void> } = { failing: 0 }
+  // What the next write waits for before it lands.
+  const writes: { holdNext?: Promise<void> } = {}
   let version = 0
 
   const clock = mock.clock(on)
@@ -57,8 +59,12 @@ function world(
   on('session.receive', ($, e) => ({ text: e.text }))
   on('session.id', () => ({ value: 's1' }))
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : env[e.name] }))
-  on('fs.write', ($, e) => {
+  on('fs.write', async ($, e) => {
+    const held = writes.holdNext
+
     fsCalls.push(`write ${e.path}`)
+    writes.holdNext = undefined
+    await held
     files.set(e.path, { text: e.text, mtimeMs: ++version })
 
     return { value: undefined }
@@ -177,6 +183,7 @@ function world(
     open,
     mv,
     reads,
+    writes,
     // Herdr writing its outbox, as a new file each time.
     outbox: (value: unknown) =>
       files.set(OUTBOX, { text: JSON.stringify(value), mtimeMs: ++version }),
@@ -815,6 +822,33 @@ describe('herdr', () => {
 
     expect(w.sent).toHaveLength(1)
     expect(textOf(await ui.drawn()), 'still scrolled back').not.toContain('from herdr')
+  })
+
+  test('publications land in order: a slow write never leaves an older one last', async ($, on) => {
+    const w = inHerdr(on)
+    let release = () => {}
+
+    await $.session.start(SESSION)
+    await w.clock.settle()
+    w.writes.holdNext = new Promise(resolve => {
+      release = resolve
+    })
+    await $.session.receive(fromPeer('api', 'one'))
+    await $.session.receive(fromPeer('api', 'two'))
+    release()
+    await w.clock.settle()
+
+    expect(w.published().threads.api?.map(m => m.text)).toEqual(['one', 'two'])
+  })
+
+  test('an unchanged outbox is not read again', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'hi' }] })
+    await w.clock.advance(OUTBOX_MS * 4)
+
+    expect(w.fsCalls.filter(call => call === `read ${OUTBOX}`)).toHaveLength(1)
   })
 
   test('a second start looks at the outbox once a period still', async ($, on) => {
