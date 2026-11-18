@@ -87,6 +87,11 @@ Where tests go:
     send's `msg_id` (seen on 2.1.327; whether it reaches a hook is unknown).
   - A plugin's `$.tool.call` of SendMessage from a `clock.every` closure
     delivers, the envelope marked `from-plugin="crosstalk"` (2.1.327).
+  - `$.store` is one file per plugin source (the installed copy's, and an
+    `inline` one for `--plugin-dir`), written key by key and read afresh:
+    a key one session sets, another running session's next `get` returns
+    (2.1.327). The kit has no `ui.focus` to drive: a mode reached by
+    moving the ring is checked live.
   - A pane takes the keys when opened with `focus` over an empty composer
     (`holdToasts` is not needed for it). Redrawing away the element that
     holds them drops them to the prompt, and the pane can ask them back
