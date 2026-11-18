@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Herdr publication v2**: `threads` are keyed by a stable `key`, and each
-  peer carries `key`, `title`, `project`, `topic`, `kind`, `status`,
+  peer carries `key`, `sessionId`, `title`, `project`, `topic`, `kind`, `status`,
   `live`, `lastSeenAt` and `lastMessageAt`; every listed session is
   published. The outbox gains `title`; a v1 outbox is still read (#10).
 

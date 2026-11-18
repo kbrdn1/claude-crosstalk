@@ -230,8 +230,10 @@ half of one.
   name without one (a Remote Control or cloud session); `topic` from its
   terminal's claude-flow file (its issue, else its branch, once filled in),
   in Herdr only.
+- `sessionId` is the peer's session id, present once its name resolved
+  (then equal to `key`), absent while the conversation is filed by name.
 - `name` is the live name (or the last known); `address` is where crosstalk
-  sends a reply.
+  sends a reply (the key itself when nothing reaches the peer any more).
 - `kind` is `interactive`, `remote` (Remote Control), `cloud` or
   `background`, and `status` `busy`, `waiting`, `idle` or `offline`, as
   `ListAgents` gives them. `live` says whether the last `ListAgents` listed
@@ -285,10 +287,11 @@ half of one.
   conversation in the pane reads it too.
 - `title` gives a conversation a title by `key` (v2); an empty one clears
   it. An entry applies once, when it appears or changes in the outbox (a
-  rename made since, with `r` or from another session, stands), and Herdr
-  may drop it once the published `title` shows it. Titles are kept in the
-  plugin's store by key, shared by every session, across renames and
-  restarts. A v1 outbox (no `title`, `to` and `read` by name) is still read.
+  rename made since, with `r` or from another session, stands): Herdr drops
+  it once the published `title` shows it, as it drops a `send` entry, and
+  writes it again to give that title again. Titles are kept in the plugin's
+  store by key, shared by every session, across renames and restarts. A v1
+  outbox (no `title`, `to` and `read` by name) is still read.
 
 A title given by name (from a session outside Herdr) stays under that
 name in the store, and shows for whichever session holds the name; it
