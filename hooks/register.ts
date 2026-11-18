@@ -1,5 +1,7 @@
 import type {
   EngineInterface,
+  FsStat,
+  ProcessRunResult,
   Register,
   Timer,
   ToolCallArgs,
@@ -23,6 +25,9 @@ export const FOCUS_RETRY_MS = 150
 // How long after a view switch the pane asks for the keyboard back: the keys
 // have to have fallen back to the prompt, or the ask is refused.
 export const REFOCUS_MS = 400
+
+// How often, in Herdr, crosstalk looks whether Herdr's outbox changed.
+export const OUTBOX_MS = 1_000
 
 // A local session's delivery is `peer` (seen live on 2.1.312); 2.1.277 named
 // another session's SendMessage `peer-send-message`. Two members of the
@@ -55,6 +60,10 @@ type Host = {
   panes: () => Promise<readonly UiPane[]>
   call: (args: ToolCallArgs) => Promise<ToolCallResult>
   save: (value: Thread.Saved) => Promise<void>
+  read: (path: string) => Promise<string>
+  write: (path: string, text: string) => Promise<void>
+  stat: (path: string) => Promise<FsStat>
+  run: (argv: readonly string[]) => Promise<ProcessRunResult>
 }
 
 /**
@@ -160,6 +169,19 @@ export const register: Register = on => {
   let mode: 'insert' | 'normal' = 'insert'
   // The key of our element holding the focus ring, as ui.focus last said.
   let ring: string | undefined
+  // In Herdr: where this session publishes its conversations, and where
+  // Herdr leaves what to send. Undefined outside it, where nothing is written.
+  let herdr: { file: string; outbox: string } | undefined
+  let sessionId = ''
+  // What was last published, its time left out: an unchanged view is not
+  // written again. One write at a time, in order.
+  let published = ''
+  let publishing: Promise<void> = Promise.resolve()
+  // The outbox's mtime and size when it was last read whole.
+  let outboxSeen = ''
+  let isPolling = false
+  // The timer looking at the outbox.
+  let looking: Timer | undefined
 
   /**
    * Where the ring is decides the mode: on the reply field, typing; on any
@@ -251,13 +273,17 @@ export const register: Register = on => {
   /**
    * The thread with a new message in it: drawn, and saved for the next start.
    */
-  async function commit(next: Thread.Thread): Promise<void> {
+  async function commit(next: Thread.Thread): Promise<boolean> {
     thread = next
     redraw()
-    await host
+
+    const isSaved = await host
       ?.now()
       .then(now => host?.save(Thread.toSaved(thread, now)))
-      .catch(() => undefined)
+      .then(() => true)
+      .catch(() => false)
+
+    return isSaved === true
   }
 
   /**
@@ -286,6 +312,41 @@ export const register: Register = on => {
 
     host?.invalidate()
     host?.status(unread > 0 && !isOpen ? `crosstalk · ${unread} unread` : undefined)
+    publish()
+  }
+
+  /**
+   * Hands the thread to Herdr, when the session runs in it: written beside
+   * the file, then moved over it, so Herdr never reads half of one. Each
+   * write takes the thread as it stands when its turn comes.
+   */
+  function publish(): void {
+    const via = host
+    const target = herdr
+
+    if (via === undefined || target === undefined) {
+      return
+    }
+
+    publishing = publishing
+      .then(async () => {
+        const view = Thread.herdrOf(thread, sessionId, await via.now())
+        const body = JSON.stringify({ ...view, updatedAt: 0 })
+
+        if (body === published) {
+          return
+        }
+
+        await via.write(`${target.file}.tmp`, JSON.stringify(view))
+
+        const moved = await via.run(['mv', '-f', `${target.file}.tmp`, target.file])
+
+        // A failed move leaves the old file: the next change writes again.
+        if (moved.exitCode === 0) {
+          published = body
+        }
+      })
+      .catch(() => undefined)
   }
 
   async function refreshPeers(): Promise<void> {
@@ -300,12 +361,14 @@ export const register: Register = on => {
     }
   }
 
-  async function send(text: string): Promise<void> {
-    const to = thread.selected
-    const message = text.trim()
-
-    if (!host || to === undefined || message === '') {
-      return
+  /**
+   * Sends `message` to `peer` through SendMessage and records it once it
+   * went, with Herdr's outbox `id` when it came from there. Resolves why it
+   * did not go, undefined when it did.
+   */
+  async function send(peer: string, message: string, id?: string): Promise<string | undefined> {
+    if (!host) {
+      return 'crosstalk is not started'
     }
 
     replying = message
@@ -313,7 +376,7 @@ export const register: Register = on => {
     const result = await host
       .call({
         tool: 'SendMessage',
-        to: Thread.addressOf(thread, to),
+        to: Thread.addressOf(thread, peer),
         message,
         summary: 'crosstalk reply',
       })
@@ -324,22 +387,151 @@ export const register: Register = on => {
     const refusal = refusalOf(result)
 
     if (refusal !== undefined) {
+      return refusal
+    }
+
+    const entry: Thread.Entry = { dir: 'out', peer, text: message, at: await host.now() }
+
+    // The pane's own reply jumps to the newest message; Herdr's keeps the
+    // reader where they are, as a message from the model does.
+    if (id === undefined) {
+      back = 0
+    } else {
+      holdPlace(peer)
+    }
+
+    await commit(Thread.record(thread, id === undefined ? entry : { ...entry, id }))
+
+    return undefined
+  }
+
+  /**
+   * The reply typed in the pane, to the conversation it shows.
+   */
+  async function reply(text: string): Promise<void> {
+    const to = thread.selected
+    const message = text.trim()
+
+    if (to === undefined || message === '') {
+      return
+    }
+
+    const refusal = await send(to, message)
+
+    if (refusal !== undefined) {
       // The open pane holds toasts back: the reason goes in the pane.
       notice = `not sent: ${refusal}`
-      host.invalidate()
+      host?.invalidate()
+    }
+  }
+
+  /**
+   * Answers one entry of Herdr's outbox, once per id: refused when it is for
+   * no conversation of this session or says nothing, else saved as pending
+   * (a reload then never sends it again) and sent as the pane's reply is.
+   */
+  async function deliver(
+    { id, to, text }: Thread.Outgoing,
+    listed: readonly string[],
+  ): Promise<void> {
+    if (!host || Object.hasOwn(thread.handled, id)) {
+      return
+    }
+
+    const at = await host.now()
+    const message = text.trim()
+    const isKnown = Thread.conversationsOf(thread).some(c => c.peer === to)
+    const refusal = !isKnown ? `unknown peer: ${to}` : message === '' ? 'empty message' : undefined
+    const answer = (result: Thread.Handled) =>
+      commit(Thread.withHandled(thread, id, result, listed))
+
+    if (refusal !== undefined) {
+      await answer({ status: 'refused', reason: refusal, at })
 
       return
     }
 
-    back = 0
-    await commit(
-      Thread.record(thread, { dir: 'out', peer: to, text: message, at: await host.now() }),
+    // Unsaved, a reload would not know the id and would send it again.
+    if (!(await answer({ status: 'pending', at }))) {
+      await answer({ status: 'refused', reason: Thread.UNSAVED, at })
+
+      return
+    }
+
+    const failure = await send(to, message, id)
+
+    await answer(
+      failure === undefined ? { status: 'sent', at } : { status: 'refused', reason: failure, at },
     )
+  }
+
+  /**
+   * Reads Herdr's outbox when it changed since it was last read (its mtime
+   * and size): marks what Herdr read, then answers its entries in order.
+   */
+  async function pollOutbox(): Promise<void> {
+    const via = host
+    const target = herdr
+
+    if (via === undefined || target === undefined || isPolling) {
+      return
+    }
+
+    isPolling = true
+
+    try {
+      const stat = await via.stat(target.outbox).catch(() => undefined)
+      const seen = stat === undefined ? '' : `${stat.mtimeMs}:${stat.size}`
+
+      if (seen === outboxSeen) {
+        return
+      }
+
+      const text = stat === undefined ? undefined : await via.read(target.outbox).catch(() => '')
+      const outbox = text === undefined ? undefined : Thread.outboxOf(text, sessionId)
+
+      // A file caught mid-write is read again at the next look.
+      outboxSeen = outbox === undefined ? '' : seen
+
+      if (outbox === undefined) {
+        return
+      }
+
+      const read = Object.entries(outbox.read).reduce(
+        (next, [peer, at]) => Thread.readUpTo(next, peer, at),
+        thread,
+      )
+
+      if (read !== thread) {
+        thread = read
+        redraw()
+      }
+
+      const listed = outbox.send.map(entry => entry.id)
+
+      for (const entry of outbox.send) {
+        await deliver(entry, listed)
+      }
+    } finally {
+      isPolling = false
+    }
   }
 
   on('session.start', async ($, e, next) => {
     const id = await $.session.id()
     const key = `${STORE_PREFIX}${id}`
+    // Herdr names the terminal a session runs in; outside Herdr, no file. A
+    // `claude -p` started from that terminal inherits the name: only the
+    // interactive session there is the one Herdr shows.
+    const terminal = await $.env.get('HC_TERMINAL_ID')
+    const home = await $.env.get('HOME')
+    const base = `${home ?? ''}/.claude/cache/herdr/${terminal ?? ''}`
+
+    sessionId = id
+    herdr =
+      e.isInteractive && terminal && home
+        ? { file: `${base}.crosstalk.json`, outbox: `${base}.crosstalk-outbox.json` }
+        : undefined
 
     host = {
       now: () => $.clock.now(),
@@ -366,6 +558,10 @@ export const register: Register = on => {
       panes: () => $.ui.panes(),
       call: args => $.tool.call(args),
       save: value => $.store.set(key, value),
+      read: path => $.fs.read(path),
+      write: (path, text) => $.fs.write(path, text),
+      stat: path => $.fs.stat(path),
+      run: argv => $.process.run(argv),
     }
 
     await $.command.register({
@@ -395,8 +591,17 @@ export const register: Register = on => {
     // A reload (a module edit, a worker respawn) finds its pane still up.
     if ((await host.panes()).some(pane => pane.id === PANE_ID)) {
       isOpen = true
+    }
+
+    // The open pane lists the peers; in Herdr they are listed all along, for
+    // the session's name and its peers' status.
+    if (isOpen || herdr !== undefined) {
       await refreshPeers()
       refresh ??= host.every(REFRESH_MS, () => void refreshPeers())
+    }
+
+    if (herdr !== undefined) {
+      looking ??= host.every(OUTBOX_MS, () => void pollOutbox())
     }
 
     return next(e)
@@ -411,12 +616,13 @@ export const register: Register = on => {
     }
 
     const { peer, text, address } = Thread.inboundOf(e.text)
+    // The time first: the thread is read after it, so a Herdr send that
+    // landed during the wait is not overwritten.
+    const at = await $.clock.now()
     const known = Thread.withAlias(thread, address, peer)
 
     holdPlace(peer)
-    await commit(
-      Thread.record(known, { dir: 'in', peer, text, at: await $.clock.now() }, isReading(peer)),
-    )
+    await commit(Thread.record(known, { dir: 'in', peer, text, at }, isReading(peer)))
 
     return next(e)
   })
@@ -431,15 +637,12 @@ export const register: Register = on => {
       typeof e.to === 'string' &&
       typeof e.message === 'string'
     ) {
-      holdPlace(Thread.peerOf(thread, e.to))
-      await commit(
-        Thread.record(thread, {
-          dir: 'out',
-          peer: Thread.peerOf(thread, e.to),
-          text: e.message,
-          at: await $.clock.now(),
-        }),
-      )
+      // The time first, the thread after it (see session.receive).
+      const at = await $.clock.now()
+      const peer = Thread.peerOf(thread, e.to)
+
+      holdPlace(peer)
+      await commit(Thread.record(thread, { dir: 'out', peer, text: e.message, at }))
     }
 
     return result
@@ -496,8 +699,13 @@ export const register: Register = on => {
 
     if (result.deny === undefined) {
       isOpen = false
-      refresh?.cancel()
-      refresh = undefined
+
+      // In Herdr the peers are listed whether the pane is open or not.
+      if (herdr === undefined) {
+        refresh?.cancel()
+        refresh = undefined
+      }
+
       redraw()
     }
 
@@ -579,7 +787,7 @@ export const register: Register = on => {
         onSubmit: text => {
           drafts.delete(thread.selected ?? '')
           notice = undefined
-          void send(text)
+          void reply(text)
         },
       },
       thread,

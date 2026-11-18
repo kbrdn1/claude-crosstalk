@@ -119,6 +119,106 @@ before the engine queues them.
 Not there yet: threads with subagents or teammates, remote (Remote Control /
 cloud) peers beyond what `ListAgents` reports.
 
+### Herdr
+
+In an interactive session that runs in a Herdr terminal (`HC_TERMINAL_ID`
+set), crosstalk also publishes its conversations to a file and sends the
+replies Herdr leaves in another, so Herdr can show them and answer without
+the pane. Outside Herdr it does neither: no file, no timer; nor does a
+`claude -p` started from that terminal, which inherits its name. This
+section is the contract Herdr's `kt-crosstalk` mod reads; `v` changes when
+it breaks.
+
+Each file has one writer, so neither side can lose the other's write.
+
+**Publication**, written by crosstalk only:
+`~/.claude/cache/herdr/<HC_TERMINAL_ID>.crosstalk.json`. Rewritten whenever
+what it says changes, written beside and moved over, so a reader never sees
+half of one.
+
+```json
+{
+  "v": 1,
+  "session": { "id": "<session id>", "name": "claude-98" },
+  "updatedAt": 1794974115192,
+  "peers": [
+    {
+      "name": "api",
+      "address": "api",
+      "status": "idle",
+      "unread": 1,
+      "last": { "dir": "in", "text": "**ready?**", "at": 1794974115000 }
+    },
+    { "name": "web", "address": "web", "status": "busy", "unread": 0 }
+  ],
+  "threads": {
+    "api": [
+      { "dir": "out", "text": "on it", "at": 1794974100000, "id": "<outbox id>" },
+      { "dir": "in", "text": "**ready?**", "at": 1794974115000 }
+    ]
+  },
+  "handled": {
+    "<outbox id>": { "status": "sent", "at": 1794974100000 },
+    "<another>": { "status": "refused", "reason": "unknown peer: nobody", "at": 1794974101000 }
+  }
+}
+```
+
+- `session.name` is the name `ListAgents` gives this session; absent until
+  it answered. In Herdr, `ListAgents` runs at the start and every 15 seconds,
+  pane open or not.
+- `updatedAt` is when what the file says last changed, not a heartbeat: an
+  idle session leaves it as it was.
+- `peers` are the inbox's rows, most recent first: every conversation, then
+  each idle local session nobody talked to (no `last`). `address` is where
+  crosstalk sends a reply; the outbox's `to` takes the `name`. `status` and
+  `at` are absent where unknown.
+- `threads` holds each conversation's messages, oldest first, text as sent
+  (Markdown); 200 messages at most across the session. `id` is on a message
+  sent from Herdr's outbox only.
+- `handled` is what became of each outbox entry: `sent`, or `refused` with
+  the reason. It keeps every id the outbox still lists; past 200 ids in all,
+  the oldest of the others go. A refused send is in no thread, as in the
+  pane.
+
+**Outbox**, written by Herdr only (write beside, then rename):
+`~/.claude/cache/herdr/<HC_TERMINAL_ID>.crosstalk-outbox.json`.
+
+```json
+{
+  "v": 1,
+  "session": "<the publication's session.id>",
+  "send": [{ "id": "<uuid>", "to": "api", "text": "on it", "at": 1794974100000 }],
+  "read": { "api": 1794974115000 }
+}
+```
+
+- crosstalk looks at the file every second (its mtime and size) and reads it
+  only when it changed.
+- An outbox whose `v` is not 1, or whose `session` names another session,
+  asks nothing. Herdr always sets `session`, so a new session in the same
+  terminal never acts on what was written for the one before; an outbox
+  without it is taken by whichever session of the terminal reads it.
+- Each `send` entry goes out once per `id`, the way the pane's reply does:
+  `SendMessage` to the peer's `address`, then the message in its thread.
+  The id is saved before the send, so a reload never sends it twice (an id
+  that cannot be saved is refused, not sent); one a reload cut off mid-send
+  comes back `sent` when its message made it into the thread, else
+  `refused` (it may have gone).
+- `at` is Herdr's own: crosstalk times a message when it sends it.
+- `to` must be the `name` of one of the published `peers`, and `text` must
+  say something: otherwise the entry is refused and nothing is sent. Nothing
+  else in the file runs anything.
+- Herdr drops an entry from `send` once its id is in `handled`; one left
+  there is never sent again.
+- `read` marks a conversation read up to a time: its published `unread`, and
+  the status line, then count only what came in after it. Opening the
+  conversation in the pane reads it too.
+
+A send the recipient holds for approval (the two sessions run in different
+permission modes) still shows as `sent`: the engine tells this session in a
+delivery notice that crosstalk does not read yet.
+
 ## Install
 
 ```bash
