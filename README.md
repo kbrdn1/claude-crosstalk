@@ -159,7 +159,6 @@ half of one.
       "kind": "interactive",
       "status": "busy",
       "live": true,
-      "lastSeenAt": 1794974110000,
       "lastMessageAt": 1794974115000,
       "unread": 1,
       "last": { "dir": "in", "text": "**ready?**", "at": 1794974115000 }
@@ -173,7 +172,16 @@ half of one.
       "kind": "remote",
       "status": "offline",
       "live": true,
-      "lastSeenAt": 1794974110000,
+      "unread": 0
+    },
+    {
+      "key": "api-3e",
+      "title": "api",
+      "name": "api-3e",
+      "address": "api-3e",
+      "project": "api",
+      "live": false,
+      "lastSeenAt": 1794970000000,
       "unread": 0
     }
   ],
@@ -219,7 +227,9 @@ half of one.
 - `kind` is `interactive`, `remote` (Remote Control), `cloud` or
   `background`, and `status` `busy`, `waiting`, `idle` or `offline`, as
   `ListAgents` gives them. `live` says whether the last `ListAgents` listed
-  it, `lastSeenAt` when one last did: both lag up to 15 seconds.
+  it; `lastSeenAt`, once it is no longer listed, when one last did (a live
+  session is seen now). Both lag up to 15 seconds, and outside Herdr they
+  only move while the pane is open.
   `lastMessageAt` is the last message, in or out.
 - `threads` holds each conversation's messages by `key`, oldest first, text
   as sent (Markdown); 200 messages at most across the session. `id` is on a
