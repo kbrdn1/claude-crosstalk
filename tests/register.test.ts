@@ -728,6 +728,23 @@ describe('herdr', () => {
     expect(w.published().threads.api?.map(m => m.text)).toEqual(['ready?'])
   })
 
+  test('an outbox longer than the ids kept still sends each entry once', async ($, on) => {
+    const w = inHerdr(on)
+    const send = Array.from({ length: Thread.MAX_HANDLED + 5 }, (_, i) => ({
+      id: `h${i}`,
+      to: 'api',
+      text: `m${i}`,
+    }))
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 1, send })
+    await w.clock.advance(OUTBOX_MS)
+    w.outbox({ v: 1, send })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent).toHaveLength(send.length)
+  })
+
   test('a second start looks at the outbox once a period still', async ($, on) => {
     const w = inHerdr(on)
 

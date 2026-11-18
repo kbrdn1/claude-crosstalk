@@ -490,16 +490,28 @@ export function fromJournal(lines: readonly string[]): Thread {
 }
 
 /**
- * The thread with what became of Herdr's outbox entry `id`, the MAX_HANDLED
- * most recent kept.
+ * The thread with what became of Herdr's outbox entry `id`. Past MAX_HANDLED
+ * ids, the oldest go, but never one the outbox still lists (`listed`): it
+ * would be sent again.
  */
-export function withHandled(thread: Thread, id: string, result: Handled): Thread {
+export function withHandled(
+  thread: Thread,
+  id: string,
+  result: Handled,
+  listed: readonly string[] = [],
+): Thread {
   const { [id]: _before, ...rest } = thread.handled
+  const kept = new Set(listed)
+  let over = Object.keys(rest).length + 1 - MAX_HANDLED
+  const entries = Object.entries(rest).filter(([key]) => {
+    const isDropped = over > 0 && !kept.has(key)
 
-  return {
-    ...thread,
-    handled: Object.fromEntries([...Object.entries(rest), [id, result]].slice(-MAX_HANDLED)),
-  }
+    over -= isDropped ? 1 : 0
+
+    return !isDropped
+  })
+
+  return { ...thread, handled: Object.fromEntries([...entries, [id, result]]) }
 }
 
 /**

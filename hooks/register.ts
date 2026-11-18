@@ -426,7 +426,10 @@ export const register: Register = on => {
    * no conversation of this session or says nothing, else saved as pending
    * (a reload then never sends it again) and sent as the pane's reply is.
    */
-  async function deliver({ id, to, text }: Thread.Outgoing): Promise<void> {
+  async function deliver(
+    { id, to, text }: Thread.Outgoing,
+    listed: readonly string[],
+  ): Promise<void> {
     if (!host || Object.hasOwn(thread.handled, id)) {
       return
     }
@@ -435,23 +438,21 @@ export const register: Register = on => {
     const message = text.trim()
     const isKnown = Thread.conversationsOf(thread).some(c => c.peer === to)
     const refusal = !isKnown ? `unknown peer: ${to}` : message === '' ? 'empty message' : undefined
+    const answer = (result: Thread.Handled) =>
+      commit(Thread.withHandled(thread, id, result, listed))
 
     if (refusal !== undefined) {
-      await commit(Thread.withHandled(thread, id, { status: 'refused', reason: refusal, at }))
+      await answer({ status: 'refused', reason: refusal, at })
 
       return
     }
 
-    await commit(Thread.withHandled(thread, id, { status: 'pending', at }))
+    await answer({ status: 'pending', at })
 
     const failure = await send(to, message, id)
 
-    await commit(
-      Thread.withHandled(
-        thread,
-        id,
-        failure === undefined ? { status: 'sent', at } : { status: 'refused', reason: failure, at },
-      ),
+    await answer(
+      failure === undefined ? { status: 'sent', at } : { status: 'refused', reason: failure, at },
     )
   }
 
@@ -497,8 +498,10 @@ export const register: Register = on => {
         redraw()
       }
 
+      const listed = outbox.send.map(entry => entry.id)
+
       for (const entry of outbox.send) {
-        await deliver(entry)
+        await deliver(entry, listed)
       }
     } finally {
       isPolling = false

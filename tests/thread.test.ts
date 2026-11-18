@@ -174,6 +174,19 @@ describe('thread', () => {
     expect(thread.handled['id-5']).toEqual({ status: 'sent', at: 5 })
   })
 
+  test('an id still in the outbox is never forgotten, however many came after', async () => {
+    let thread = Thread.withHandled(Thread.EMPTY, 'old', { status: 'sent', at: 0 })
+
+    for (let at = 1; at <= Thread.MAX_HANDLED + 5; at++) {
+      thread = Thread.withHandled(thread, `id-${at}`, { status: 'sent', at }, ['old'])
+    }
+
+    expect(thread.handled.old).toEqual({ status: 'sent', at: 0 })
+    expect(Object.keys(thread.handled)).toHaveLength(Thread.MAX_HANDLED)
+    expect(thread.handled['id-6'], 'the oldest of the others go first').toBeUndefined()
+    expect(thread.handled['id-7']).toEqual({ status: 'sent', at: 7 })
+  })
+
   test('handled ids are saved; one a reload cut off mid-send comes back refused', async () => {
     let thread = Thread.record(Thread.EMPTY, {
       dir: 'out',
