@@ -2,6 +2,7 @@ import type { On, ToolCallInput, UiOpenResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
+import { OUTBOX_MS, REFRESH_MS } from '../hooks/register'
 import * as Thread from '../hooks/thread'
 import {
   CROSSTALK,
@@ -17,34 +18,82 @@ import {
 
 const JOURNAL_FILE = '/home/me/.claude/projects/-work/s1.jsonl'
 
+const HERDR = '/home/me/.claude/cache/herdr'
+const PUBLICATION = `${HERDR}/t9.crosstalk.json`
+const OUTBOX = `${HERDR}/t9.crosstalk-outbox.json`
+
 /**
- * The world beneath crosstalk: a clock, session s1 in HOME /home/me whose
- * journal holds `journal`, a store holding `stored`, ListAgents answering
- * LISTING, SendMessage answering sent and remembering every call, panes
- * opening.
+ * The world beneath crosstalk: a clock, session s1 in HOME /home/me (and
+ * `env` beside it) whose journal holds `journal`, a store holding `stored`,
+ * files in memory, ListAgents answering LISTING, SendMessage answering sent
+ * and remembering every call with the store as it stood, panes opening.
  */
-function world(on: On, journal: string[] = [], stored: Record<string, unknown> = {}) {
+function world(
+  on: On,
+  journal: string[] = [],
+  stored: Record<string, unknown> = {},
+  env: Record<string, string> = {},
+) {
   const sent: ToolCallInput[] = []
+  const storedAtSend: unknown[] = []
   const opened: string[] = []
   const statuses: (string | undefined)[] = []
   const runs: (readonly string[])[] = []
   const store = new Map(Object.entries(stored))
+  const files = new Map<string, { text: string; mtimeMs: number }>()
+  const fsCalls: string[] = []
+  const listings: number[] = []
   const open: { result: UiOpenResult } = { result: { isPlaced: true } }
+  // How `mv` exits: 0 moves the file.
+  const mv = { exitCode: 0 }
+  let version = 0
 
   const clock = mock.clock(on)
+  const missing = { deny: 'ENOENT: no such file or directory' }
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.receive', ($, e) => ({ text: e.text }))
   on('session.id', () => ({ value: 's1' }))
-  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : env[e.name] }))
+  on('fs.write', ($, e) => {
+    fsCalls.push(`write ${e.path}`)
+    files.set(e.path, { text: e.text, mtimeMs: ++version })
+
+    return { value: undefined }
+  })
+  on('fs.read', ($, e) => {
+    fsCalls.push(`read ${e.path}`)
+
+    const file = files.get(e.path)
+
+    return file === undefined ? missing : { value: file.text }
+  })
+  on('fs.stat', ($, e) => {
+    fsCalls.push(`stat ${e.path}`)
+
+    const file = files.get(e.path)
+
+    return file === undefined
+      ? missing
+      : { value: { kind: 'file', size: file.text.length, mtimeMs: file.mtimeMs, isLink: false } }
+  })
   on('process.run', ($, e) => {
     runs.push(e.argv)
+
+    const [command, , from = '', to = ''] = e.argv
+    const moved = files.get(from)
+    const isMove = command === 'mv'
+
+    if (isMove && mv.exitCode === 0 && moved !== undefined) {
+      files.delete(from)
+      files.set(to, moved)
+    }
 
     const stdout = e.argv[0] === 'find' ? `${JOURNAL_FILE}\n` : journal.join('\n')
 
     return {
       value: {
-        exitCode: 0,
+        exitCode: isMove ? mv.exitCode : 0,
         stdout,
         stderr: '',
         isStdoutTruncated: false,
@@ -65,9 +114,14 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
     return { value: undefined }
   })
 
-  on('tool.call', { tool: 'ListAgents' }, () => ({ result: { listing: LISTING } }))
+  on('tool.call', { tool: 'ListAgents' }, () => {
+    listings.push(clock.now())
+
+    return { result: { listing: LISTING } }
+  })
   on('tool.call', { tool: 'SendMessage' }, ($, e) => {
     sent.push(e)
+    storedAtSend.push(JSON.parse(JSON.stringify(store.get('thread:s1') ?? null)))
 
     if (Reflect.get(e, 'to') === 'alpha') {
       return { result: TO_TEAMMATE }
@@ -100,7 +154,32 @@ function world(on: On, journal: string[] = [], stored: Record<string, unknown> =
     return { value: undefined }
   })
 
-  return { sent, opened, statuses, runs, store, clock, open }
+  return {
+    sent,
+    storedAtSend,
+    opened,
+    statuses,
+    runs,
+    store,
+    files,
+    fsCalls,
+    listings,
+    clock,
+    open,
+    mv,
+    // Herdr writing its outbox, as a new file each time.
+    outbox: (value: unknown) =>
+      files.set(OUTBOX, { text: JSON.stringify(value), mtimeMs: ++version }),
+    // What crosstalk last published for Herdr.
+    published: (): Thread.Publication => JSON.parse(files.get(PUBLICATION)?.text ?? 'null'),
+  }
+}
+
+/**
+ * The world of a session that runs in Herdr's terminal t9.
+ */
+function inHerdr(on: On, stored: Record<string, unknown> = {}) {
+  return world(on, [], stored, { HC_TERMINAL_ID: 't9' })
 }
 
 /**
@@ -594,5 +673,206 @@ describe('register', () => {
     await $.session.receive(fromPeer('api', 'ping'))
 
     expect(w.statuses.at(-1)).toBe('crosstalk · 1 unread')
+  })
+})
+
+describe('herdr', () => {
+  test('outside Herdr, crosstalk writes no file, polls none, lists no peer', async ($, on) => {
+    const w = world(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await w.clock.advance(REFRESH_MS * 2)
+
+    expect(w.fsCalls).toEqual([])
+    expect(w.listings, 'the pane closed, no ListAgents').toEqual([])
+  })
+
+  test("a headless session started from Herdr's terminal leaves Herdr's files alone", async ($, on) => {
+    const w = inHerdr(on)
+
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'not from claude -p' }] })
+    await $.session.start({ ...SESSION, isInteractive: false })
+    await w.clock.advance(REFRESH_MS)
+
+    expect(w.fsCalls).toEqual([])
+    expect(w.listings).toEqual([])
+    expect(w.sent).toEqual([])
+  })
+
+  test('an outbox written for another session sends nothing', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 1, session: 's0', send: [{ id: 'h1', to: 'api', text: 'for s0' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent).toEqual([])
+    expect(w.published().handled).toEqual({})
+  })
+
+  test('a publication whose move failed is written again', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await w.clock.settle()
+    w.mv.exitCode = 1
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await w.clock.settle()
+
+    expect(w.published().threads, 'the move failed: the old file').toEqual({})
+
+    w.mv.exitCode = 0
+    await w.clock.advance(REFRESH_MS)
+
+    expect(w.published().threads.api?.map(m => m.text)).toEqual(['ready?'])
+  })
+
+  test('a second start looks at the outbox once a period still', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.start(SESSION)
+    w.fsCalls.length = 0
+    await w.clock.advance(OUTBOX_MS * 3)
+
+    expect(w.fsCalls.filter(call => call.startsWith('stat'))).toHaveLength(3)
+  })
+
+  test('in Herdr, the conversations are published as they change, whole files only', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().session, 'named by the listing taken at the start').toEqual({
+      id: 's1',
+      name: 'claude-98',
+    })
+    expect(w.published().peers.map(p => p.name)).toEqual(['api', 'web'])
+
+    await w.clock.advance(1000)
+    await $.session.receive(fromPeer('api', '**ready?**'))
+    await w.clock.settle()
+
+    const published = w.published()
+
+    expect(published.updatedAt).toBe(1000)
+    expect(published.peers[0]).toEqual({
+      name: 'api',
+      address: 'api',
+      status: 'idle',
+      unread: 1,
+      last: { dir: 'in', text: '**ready?**', at: 1000 },
+    })
+    expect(published.threads).toEqual({ api: [{ dir: 'in', text: '**ready?**', at: 1000 }] })
+    expect([...w.files.keys()], 'written beside, then moved over').toEqual([PUBLICATION])
+    expect(w.runs.at(-1)).toEqual(['mv', '-f', `${PUBLICATION}.tmp`, PUBLICATION])
+
+    const writes = () => w.fsCalls.filter(call => call.startsWith('write')).length
+    const before = writes()
+
+    await w.clock.advance(REFRESH_MS)
+
+    expect(writes(), 'nothing new, nothing written').toBe(before)
+  })
+
+  test("a message from Herdr goes out once, as the pane's reply does, and is answered", async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'from herdr', at: 0 }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent.map(e => [Reflect.get(e, 'to'), Reflect.get(e, 'message')])).toEqual([
+      ['api', 'from herdr'],
+    ])
+    expect(w.storedAtSend[0], 'saved as handled before it went').toMatchObject({
+      handled: { h1: { status: 'pending' } },
+    })
+    expect(w.published().handled).toEqual({ h1: { status: 'sent', at: OUTBOX_MS } })
+    expect(w.published().threads.api).toEqual([
+      { dir: 'out', text: 'from herdr', at: OUTBOX_MS, id: 'h1' },
+    ])
+
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'from herdr', at: 0 }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent, 'the same id is never sent twice').toHaveLength(1)
+  })
+
+  test('an id a reload cut off mid-send is not sent again', async ($, on) => {
+    const pending = Thread.withHandled(Thread.EMPTY, 'h1', { status: 'pending', at: 1 })
+    const w = inHerdr(on, { 'thread:s1': Thread.toSaved(pending, 1) })
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'again?' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent).toEqual([])
+    expect(w.published().handled).toEqual({
+      h1: { status: 'refused', reason: Thread.INTERRUPTED, at: 1 },
+    })
+  })
+
+  test('Herdr cannot write to a stranger nor send nothing; a refused send is not drawn', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('gone', 'still here?'))
+    w.outbox({
+      v: 1,
+      send: [
+        { id: 'h1', to: 'nobody', text: 'hi' },
+        { id: 'h2', to: 'api', text: '  ' },
+        { id: 'h3', to: 'gone', text: 'you there?' },
+      ],
+    })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent.map(e => Reflect.get(e, 'to'))).toEqual(['gone'])
+    expect(w.published().handled).toEqual({
+      h1: { status: 'refused', reason: 'unknown peer: nobody', at: OUTBOX_MS },
+      h2: { status: 'refused', reason: 'empty message', at: OUTBOX_MS },
+      h3: {
+        status: 'refused',
+        reason: "Not sent — no agent named 'gone' is reachable.",
+        at: OUTBOX_MS,
+      },
+    })
+    expect(w.published().threads.gone).toEqual([{ dir: 'in', text: 'still here?', at: 0 }])
+  })
+
+  test("Herdr's read marks clear what it read; the status line agrees", async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await w.clock.set(1000)
+    await $.session.receive(fromPeer('api', 'one'))
+    await w.clock.set(2000)
+    await $.session.receive(fromPeer('api', 'two'))
+
+    expect(w.statuses.at(-1)).toBe('crosstalk · 2 unread')
+
+    w.outbox({ v: 1, send: [], read: { api: 1000 } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.statuses.at(-1)).toBe('crosstalk · 1 unread')
+    expect(w.published().peers[0]?.unread).toBe(1)
+  })
+
+  test('in Herdr, peers are listed on the interval, pane open or not', async ($, on) => {
+    const w = inHerdr(on)
+
+    on('ui.close', () => ({ value: undefined }))
+    await $.session.start(SESSION)
+    await $.command.run(CROSSTALK)
+    await $.command.run(CROSSTALK)
+
+    const before = w.listings.length
+
+    await w.clock.advance(REFRESH_MS)
+
+    expect(w.listings).toHaveLength(before + 1)
   })
 })
