@@ -174,7 +174,6 @@ half of one.
       "title": "laptop-bubble",
       "name": "laptop-bubble",
       "address": "laptop-bubble",
-      "project": "laptop-bubble",
       "kind": "remote",
       "status": "offline",
       "live": true,
@@ -227,8 +226,10 @@ half of one.
   `project · topic`, else `project`, else the name. Two sessions of one
   project without a topic are told apart by their id's first characters.
   `project` comes from the peer's publication, else its name without the
-  random suffix (`claude-flow-1d` gives `claude-flow`); `topic` from its
-  terminal's claude-flow file (its issue, else its branch), in Herdr only.
+  random suffix (`claude-flow-1d` gives `claude-flow`), and is absent for a
+  name without one (a Remote Control or cloud session); `topic` from its
+  terminal's claude-flow file (its issue, else its branch, once filled in),
+  in Herdr only.
 - `name` is the live name (or the last known); `address` is where crosstalk
   sends a reply.
 - `kind` is `interactive`, `remote` (Remote Control), `cloud` or
@@ -272,9 +273,11 @@ half of one.
   comes back `sent` when its message made it into the thread, else
   `refused` (it may have gone).
 - `at` is Herdr's own: crosstalk times a message when it sends it.
-- `to` must be the `key` (or the `name`) of one of the published `peers`,
-  and `text` must say something: otherwise the entry is refused and nothing
-  is sent. Nothing else in the file runs anything.
+- `to` must be the `key` of one of the published `peers` (or the `name` of
+  one that is `live`: a gone session's last name maps to nothing), and
+  `text` must say something: otherwise the entry is refused and nothing is
+  sent. `read` and `title` take a key, or a live name, the same way.
+  Nothing else in the file runs anything.
 - Herdr drops an entry from `send` once its id is in `handled`; one left
   there is never sent again.
 - `read` marks a conversation read up to a time: its published `unread`, and
