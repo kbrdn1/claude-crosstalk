@@ -190,6 +190,24 @@ export function keyOf(thread: Thread, name: string): string {
 }
 
 /**
+ * The key a delivery from `name`, at socket `address`, files under: the
+ * session id its name resolves to; else, when its socket was last known
+ * as a session id, that id (the directory may not have been read yet, and
+ * a key goes from a name to an id, never back); else the name.
+ */
+export function senderOf(thread: Thread, name: string, address: string | undefined): string {
+  const key = keyOf(thread, name)
+  const aliased =
+    address !== undefined && Object.hasOwn(thread.aliases, address)
+      ? thread.aliases[address]
+      : undefined
+  const isSession =
+    aliased !== undefined && aliased !== name && Object.hasOwn(thread.known, aliased)
+
+  return key === name && isSession ? aliased : key
+}
+
+/**
  * The conversation a SendMessage `to` belongs to: the key behind a socket
  * address a peer wrote from, else the key of the address without its ref.
  */
@@ -466,7 +484,10 @@ export function topicOf(text: string): string | undefined {
   const labelOf = (id: string) => {
     const label = steps.find(step => step.id === id)?.label
 
-    return typeof label === 'string' ? label.replace(new RegExp(`^${id}\\s+`), '') : undefined
+    // A step not filled in yet is its bare id: it says nothing.
+    const detail = typeof label === 'string' ? new RegExp(`^${id}\\s+(.+)$`).exec(label) : null
+
+    return detail?.[1]?.trim() || undefined
   }
 
   return labelOf('issue') ?? labelOf('branch')
@@ -504,6 +525,18 @@ function nameOfKey(thread: Thread, key: string): string {
 }
 
 /**
+ * A key's project: the one its publication gives, else its name without the
+ * random suffix a session's name carries; none for a name without one (a
+ * Remote Control or cloud session's).
+ */
+function projectOf(thread: Thread, key: string, name: string): string | undefined {
+  return (
+    knownOf(thread, key).project ??
+    (NAME_SUFFIX.test(name) ? name.replace(NAME_SUFFIX, '') : undefined)
+  )
+}
+
+/**
  * Each key's title: the one the person gave, else `project · topic`, else
  * the project, else the name. Two keys whose project is all they have are
  * told apart by their session id's first characters, or else by their names.
@@ -511,9 +544,10 @@ function nameOfKey(thread: Thread, key: string): string {
 export function titlesOf(thread: Thread, keys: readonly string[]): Record<string, string> {
   const derived = keys.map(key => {
     const name = nameOfKey(thread, key)
-    const { project = name.replace(NAME_SUFFIX, ''), topic } = knownOf(thread, key)
+    const base = projectOf(thread, key, name) ?? name
+    const { topic } = knownOf(thread, key)
 
-    return { key, name, project, title: topic === undefined ? project : `${project} · ${topic}` }
+    return { key, name, title: topic === undefined ? base : `${base} · ${topic}` }
   })
   const counts = new Map<string, number>()
 
@@ -856,7 +890,7 @@ export type HerdrPeer = {
   title: string
   name: string
   address: string
-  project: string
+  project?: string
   topic?: string
   kind?: string
   status?: string
@@ -917,7 +951,8 @@ export function herdrOf(thread: Thread, self: Self, updatedAt: number): Publicat
     const { unread = 0, last } = conversations.get(key) ?? {}
     const listed = thread.peers.find(peer => keyOf(thread, peer.name) === key)
     const name = nameOfKey(thread, key)
-    const { project = name.replace(NAME_SUFFIX, ''), topic } = knownOf(thread, key)
+    const project = projectOf(thread, key, name)
+    const { topic } = knownOf(thread, key)
     const seen = Object.hasOwn(thread.seen, key) ? thread.seen[key] : undefined
     const isSession = Object.hasOwn(thread.known, key) && key !== name
 
@@ -927,7 +962,7 @@ export function herdrOf(thread: Thread, self: Self, updatedAt: number): Publicat
       title: titles[key] ?? name,
       name,
       address: addressOf(thread, key),
-      project,
+      ...(project === undefined ? {} : { project }),
       ...(topic === undefined ? {} : { topic }),
       ...(listed === undefined ? {} : { kind: kindOf(listed.kind), status: listed.status }),
       live: listed !== undefined,

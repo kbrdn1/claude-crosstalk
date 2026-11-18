@@ -292,7 +292,58 @@ describe('thread', () => {
     ).toBe('#61')
     expect(Thread.topicOf(flow([{ id: 'branch', label: 'branch fix/#9-y' }]))).toBe('fix/#9-y')
     expect(Thread.topicOf(flow([]))).toBeUndefined()
+    expect(
+      Thread.topicOf(
+        flow([
+          { id: 'issue', label: 'issue', state: 'pending' },
+          { id: 'branch', label: 'branch feat/x', state: 'done' },
+        ]),
+      ),
+      'a step not filled in yet says nothing',
+    ).toBe('feat/x')
+    expect(Thread.topicOf(flow([{ id: 'branch', label: 'branch', state: 'pending' }]))).toBe(
+      undefined,
+    )
     expect(Thread.topicOf('not json')).toBeUndefined()
+  })
+
+  test('a delivery from a name not resolved yet stays with the session id its socket had', async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }],
+    })
+
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-1d' }])
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'S1')
+
+    // A start whose listing failed: no name resolves.
+    const fresh = Thread.withDirectory({ ...thread, peers: [] }, [])
+
+    expect(Thread.senderOf(fresh, 'api-1d', 'uds:/1.sock')).toBe('S1')
+    expect(Thread.senderOf(fresh, 'api-1d', 'uds:/2.sock'), 'another socket: the name').toBe(
+      'api-1d',
+    )
+    expect(Thread.senderOf(thread, 'api-1d', undefined), 'resolved: the id').toBe('S1')
+    expect(
+      Thread.senderOf(
+        Thread.withAlias(Thread.EMPTY, 'uds:/3.sock', 'old-00'),
+        'new-00',
+        'uds:/3.sock',
+      ),
+      'a socket aliased to a name: the name, renamed as before',
+    ).toBe('new-00')
+  })
+
+  test("project is what a publication says or a name's suffix gives, never made up", async () => {
+    const thread = Thread.withListing(Thread.EMPTY, {
+      peers: [
+        { name: 'flow-1d', kind: 'interactive', status: 'idle' },
+        { name: 'laptop-bubble', kind: 'Remote Control', status: 'offline' },
+      ],
+    })
+    const peers = Thread.herdrOf(thread, { id: 's1' }, 0).peers
+
+    expect(peers.map(peer => peer.project)).toEqual(['flow', undefined])
+    expect(Thread.titlesOf(thread, ['laptop-bubble'])).toEqual({ 'laptop-bubble': 'laptop-bubble' })
   })
 
   test("ListAgents' kinds as Herdr reads them", async () => {
@@ -394,7 +445,6 @@ describe('thread', () => {
         title: 'constructor',
         name: 'constructor',
         address: 'constructor',
-        project: 'constructor',
         live: false,
         lastMessageAt: 2,
         unread: 1,
@@ -471,7 +521,6 @@ describe('thread', () => {
           title: 'api',
           name: 'api',
           address: 'api',
-          project: 'api',
           kind: 'interactive',
           status: 'idle',
           live: true,
@@ -484,7 +533,6 @@ describe('thread', () => {
           title: 'gone',
           name: 'gone',
           address: 'uds:/9.sock',
-          project: 'gone',
           live: false,
           lastMessageAt: 1,
           unread: 1,
@@ -495,7 +543,6 @@ describe('thread', () => {
           title: 'web',
           name: 'web',
           address: 'web',
-          project: 'web',
           kind: 'interactive',
           status: 'busy',
           live: true,
@@ -506,7 +553,6 @@ describe('thread', () => {
           title: 'laptop-bubble',
           name: 'laptop-bubble',
           address: 'laptop-bubble',
-          project: 'laptop-bubble',
           kind: 'remote',
           status: 'offline',
           live: true,
@@ -517,7 +563,6 @@ describe('thread', () => {
           title: 'ultrareview: HEAD',
           name: 'ultrareview: HEAD',
           address: 'ultrareview: HEAD',
-          project: 'ultrareview: HEAD',
           kind: 'cloud',
           status: 'idle',
           live: true,
