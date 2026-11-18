@@ -72,6 +72,11 @@ sessions on one machine talk. crosstalk adds the part you see:
   both sides stacked left below, a line never past 72 columns.
 - **Unread**: while the pane is closed, the status line counts the messages
   nobody looked at.
+- **Names**: a conversation shows by its title: the one you gave it (`r` in
+  normal mode, or from Herdr), else its project and what it works on, else
+  its project (the session's name without its random suffix). Titles are
+  shared by every session. In Herdr, a conversation follows its peer's
+  session across a restart, its new name included (see Herdr below).
 
 Keys, vim-style, drawn at the bottom of the pane as they apply:
 
@@ -82,6 +87,7 @@ Keys, vim-style, drawn at the bottom of the pane as they apply:
 | `g` | top row | back to the latest | typed |
 | `l`, `⏎` | open the conversation | · | `⏎` sends |
 | `i` | · | reply (insert mode) | typed |
+| `r` | · | rename the conversation | typed |
 | `h` | · | back to the inbox | typed |
 | `esc` | close the pane | back to the inbox | normal mode |
 | `q` | close the pane | close the pane | typed |
