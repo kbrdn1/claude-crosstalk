@@ -50,8 +50,12 @@ function world(
   const reads: { failing: number; held?: Promise<void> } = { failing: 0 }
   // What the next write waits for before it lands.
   const writes: { holdNext?: Promise<void> } = {}
-  // Whether the store refuses every save.
-  const saves = { isFull: false }
+  // Whether the store refuses every save, how many reads of the titles fail
+  // next, and what a save of the titles waits for first.
+  const saves: { isFull: boolean; titleReadsFailing: number; holdTitles?: Promise<void> } = {
+    isFull: false,
+    titleReadsFailing: 0,
+  }
   // What ListAgents answers.
   const agents = { listing: LISTING }
   let version = 0
@@ -159,10 +163,22 @@ function world(
       },
     }
   })
-  on('store.get', ($, e) => ({ value: store.get(e.key) }))
-  on('store.set', ($, e) => {
+  on('store.get', ($, e) => {
+    if (e.key === 'titles' && saves.titleReadsFailing > 0) {
+      saves.titleReadsFailing -= 1
+
+      return { deny: 'the store could not be read' }
+    }
+
+    return { value: store.get(e.key) }
+  })
+  on('store.set', async ($, e) => {
     if (saves.isFull) {
       return { deny: 'the store is full' }
+    }
+
+    if (e.key === 'titles') {
+      await saves.holdTitles
     }
 
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
@@ -1012,7 +1028,6 @@ describe('herdr', () => {
       title: 'api',
       name: 'api',
       address: 'api',
-      project: 'api',
       kind: 'interactive',
       status: 'idle',
       live: true,
@@ -1285,5 +1300,88 @@ describe('names', () => {
       key: API_ID,
       title: 'API backend',
     })
+  })
+
+  test('a message landing while a moved title is stored is kept', async ($, on) => {
+    const w = inHerdr(on, { titles: { api: 'API backend' } })
+    let release = () => {}
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'before'))
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.saves.holdTitles = new Promise(resolve => {
+      release = resolve
+    })
+    await w.clock.advance(REFRESH_MS)
+    await $.session.receive(fromPeer('api', 'during'))
+    w.saves.holdTitles = undefined
+    release()
+    await w.clock.settle()
+
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['before', 'during'])
+    expect(w.store.get('titles')).toEqual({ [API_ID]: 'API backend' })
+  })
+
+  test('titles that could not be read are not written over; the outbox is read again', async ($, on) => {
+    const w = inHerdr(on, { titles: { 'S-other': 'kept' } })
+
+    await $.session.start(SESSION)
+    w.saves.titleReadsFailing = 1
+    w.outbox({ v: 2, title: { api: 'API backend' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles'), "another session's titles intact").toEqual({ 'S-other': 'kept' })
+
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ 'S-other': 'kept', api: 'API backend' })
+  })
+
+  test('Herdr may name a resolved peer: to, read and title by name reach its id', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'one'))
+    w.outbox({ v: 1, send: [{ id: 'h1', to: 'api', text: 'by name' }], read: { api: 0 } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent.map(e => Reflect.get(e, 'to'))).toEqual(['api'])
+    expect(w.published().threads[API_ID]?.map(m => m.text)).toEqual(['one', 'by name'])
+    expect(w.published().peers.find(peer => peer.key === API_ID)?.unread).toBe(0)
+
+    w.outbox({ v: 2, title: { api: 'API backend' } })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.store.get('titles')).toEqual({ [API_ID]: 'API backend' })
+  })
+
+  test('Herdr may write to any session the publication lists, talked to or not', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    w.outbox({ v: 2, send: [{ id: 'h1', to: 'laptop-bubble', text: 'hi' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(w.sent.map(e => Reflect.get(e, 'to'))).toEqual(['laptop-bubble'])
+  })
+
+  test('a draft moves with its conversation when it resolves', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    await ui.press({ key: 'open:api' })
+    await ui.redraw()
+    await ui.input({ key: 'reply', text: 'half a thought', kind: 'change' })
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await w.clock.advance(REFRESH_MS)
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'reply' }))?.props.value).toBe('half a thought')
   })
 })

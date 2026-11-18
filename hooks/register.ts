@@ -193,6 +193,8 @@ export const register: Register = on => {
   // The outbox's mtime and size when it was last read whole.
   let outboxSeen = ''
   let isPolling = false
+  // The titles being stored, one change after the other.
+  let titling: Promise<unknown> = Promise.resolve()
   // The timer looking at the outbox.
   let looking: Timer | undefined
 
@@ -431,21 +433,47 @@ export const register: Register = on => {
    * Changes the shared titles by `changes` (key to title, an empty one
    * clears), over what the store holds now: another session's titles stay.
    */
-  async function storeTitles(changes: Readonly<Record<string, string>>): Promise<void> {
-    const via = host
+  function storeTitles(changes: Readonly<Record<string, string>>): Promise<boolean> {
+    // One change at a time: two would each read the store, and the last to
+    // write would undo the other.
+    const run = titling.then(async () => {
+      const via = host
 
-    if (via === undefined || Object.keys(changes).length === 0) {
-      return
-    }
+      if (via === undefined || Object.keys(changes).length === 0) {
+        return true
+      }
 
-    const stored = Thread.withTitles(thread, await via.titles().catch(() => undefined)).titles
-    const titles = Object.fromEntries(
-      Object.entries({ ...stored, ...changes }).filter(([, title]) => title !== ''),
-    )
+      // Titles that could not be read are not written over: every
+      // session's are in there.
+      const read = await via.titles().then(
+        value => ({ value }),
+        () => undefined,
+      )
 
-    await via.saveTitles(titles).catch(() => undefined)
-    thread = Thread.withTitles(thread, titles)
-    redraw()
+      if (read === undefined) {
+        return false
+      }
+
+      const stored = Thread.withTitles(Thread.EMPTY, read.value).titles
+      const titles = Object.fromEntries(
+        Object.entries({ ...stored, ...changes }).filter(([, title]) => title !== ''),
+      )
+      const isSaved = await via.saveTitles(titles).then(
+        () => true,
+        () => false,
+      )
+
+      if (isSaved) {
+        thread = Thread.withTitles(thread, titles)
+        redraw()
+      }
+
+      return isSaved
+    })
+
+    titling = run.catch(() => false)
+
+    return run
   }
 
   /**
@@ -477,18 +505,34 @@ export const register: Register = on => {
 
     const at = await host.now()
     const sessions = herdr === undefined ? undefined : await readDirectory()
-    // Titles another session gave since.
+    // Titles another session gave since; unreadable, the ones known stay.
     const stored = await host.titles().catch(() => undefined)
-    // The thread read after every wait: nothing that landed meanwhile is lost.
-    const listed = Thread.withListing(
-      Thread.withTitles(thread, stored),
-      Thread.listingOf(listing),
-      at,
-    )
-    const next = sessions === undefined ? listed : Thread.withDirectory(listed, sessions)
+    const merged = (base: Thread.Thread, titles: unknown) => {
+      const withTitles = titles === undefined ? base : Thread.withTitles(base, titles)
+      const listed = Thread.withListing(withTitles, Thread.listingOf(listing), at)
 
+      return {
+        listed,
+        next: sessions === undefined ? listed : Thread.withDirectory(listed, sessions),
+      }
+    }
+    const before = merged(thread, stored)
+    const changes = titleChanges(before.listed.titles, before.next.titles)
     // A title that moved with its conversation moves in the store too.
-    await storeTitles(titleChanges(listed.titles, next.titles))
+    const isMoved = Object.keys(changes).length > 0 && (await storeTitles(changes))
+    // The thread read after every wait: nothing that landed meanwhile is lost.
+    const { listed, next } = merged(thread, isMoved ? undefined : stored)
+
+    // The draft typed under a name follows its conversation to the id.
+    for (const { id, name } of sessions ?? []) {
+      const draft = drafts.get(name)
+
+      if (draft !== undefined && Thread.keyOf(next, name) === id) {
+        drafts.delete(name)
+
+        if (!drafts.has(id)) drafts.set(id, draft)
+      }
+    }
 
     if (next.entries !== listed.entries) {
       // A conversation moved to its session id: kept for the next start.
@@ -654,8 +698,9 @@ export const register: Register = on => {
         redraw()
       }
 
-      // The titles Herdr gives, by key or name; only those that change.
-      await storeTitles(
+      // The titles Herdr gives, by key or name; only those that change. Not
+      // stored, the outbox is read again at the next look.
+      const isTitled = await storeTitles(
         Object.fromEntries(
           Object.entries(outbox.title)
             .map(([peer, title]) => [Thread.keyOf(thread, peer), title.trim()] as const)
@@ -665,6 +710,10 @@ export const register: Register = on => {
             ),
         ),
       )
+
+      if (!isTitled) {
+        outboxSeen = ''
+      }
 
       const listed = outbox.send.map(entry => entry.id)
 
@@ -761,7 +810,9 @@ export const register: Register = on => {
     }
 
     // The titles every session shares.
-    thread = Thread.withTitles(thread, await host.titles().catch(() => undefined))
+    const titles = await host.titles().catch(() => undefined)
+
+    thread = Thread.withTitles(thread, titles)
 
     await prune($).catch(() => undefined)
 
@@ -797,7 +848,7 @@ export const register: Register = on => {
     // landed during the wait is not overwritten.
     const at = await $.clock.now()
     // Filed under the sender's session id when Herdr's directory knows it.
-    const peer = Thread.keyOf(thread, name)
+    const peer = Thread.senderOf(thread, name, address)
     const known = Thread.withAlias(thread, address, peer)
 
     holdPlace(peer)
