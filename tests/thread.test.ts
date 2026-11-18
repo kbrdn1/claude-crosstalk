@@ -146,6 +146,141 @@ describe('thread', () => {
     expect(thread.entries[0]?.text).toBe('5')
   })
 
+  test("a name Herdr's directory resolves files its conversation under the session id", async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      self: 'me-00',
+      peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }],
+    })
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1', name: 'api-1d', project: 'api', topic: '#61' },
+      { id: 'S2', name: 'gone-00' },
+      { id: 'S0', name: 'me-00' },
+    ])
+
+    expect(Thread.keyOf(thread, 'api-1d')).toBe('S1')
+    expect(Thread.keyOf(thread, 'gone-00'), 'a name nobody lists maps to nothing').toBe('gone-00')
+    expect(Thread.keyOf(thread, 'me-00'), 'nor this session').toBe('me-00')
+    expect(Thread.peerOf(thread, 'api-1d [ab12cd]')).toBe('S1')
+    expect(Thread.addressOf(thread, 'S1'), 'a reply goes to its live name').toBe('api-1d')
+  })
+
+  test('a conversation that resolves takes everything keyed by it to the session id', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'api-fd', kind: 'interactive', status: 'idle' }] },
+      5,
+    )
+
+    thread = Thread.withAlias(thread, 'uds:/1.sock', 'api-fd')
+    thread = Thread.record(thread, { dir: 'in', peer: 'api-fd', text: 'a', at: 1 })
+    thread = Thread.record(thread, { dir: 'in', peer: 'api-fd', text: 'b', at: 2 })
+    thread = Thread.readUpTo(thread, 'api-fd', 1)
+    thread = Thread.withTitle(thread, 'api-fd', 'API backend')
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-fd', project: 'api' }])
+
+    expect(thread.entries.map(e => e.peer)).toEqual(['S1', 'S1'])
+    expect(thread.unread, 'the read mark kept: one unread, not two').toEqual({ S1: 1 })
+    expect(thread.titles).toEqual({ S1: 'API backend' })
+    expect(thread.seen).toEqual({ S1: 5 })
+    expect(thread.selected).toBe('S1')
+    expect(Thread.peerOf(thread, 'uds:/1.sock')).toBe('S1')
+
+    // The session restarts under a new name: same id, same conversation.
+    thread = Thread.withListing(
+      thread,
+      { peers: [{ name: 'api-1d', kind: 'interactive', status: 'busy' }] },
+      9,
+    )
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-1d', project: 'api' }])
+
+    expect(Thread.keyOf(thread, 'api-1d')).toBe('S1')
+    expect(Thread.keyOf(thread, 'api-fd'), 'its old name maps to nothing now').toBe('api-fd')
+    expect(thread.seen).toEqual({ S1: 9 })
+    expect(Thread.conversationsOf(thread).map(c => [c.peer, c.status])).toEqual([['S1', 'busy']])
+  })
+
+  test("a session id's own title wins over the one its old name carried", async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      peers: [{ name: 'api-fd', kind: 'interactive', status: 'idle' }],
+    })
+
+    thread = Thread.withTitle(thread, 'api-fd', 'old')
+    thread = Thread.withTitle(thread, 'S1', 'given')
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-fd' }])
+
+    expect(thread.titles).toEqual({ S1: 'given' })
+    expect(Thread.withTitle(thread, 'S1', '  ').titles, 'an empty title clears it').toEqual({})
+  })
+
+  test('a title: the given one, else project and topic, else project, else the name', async () => {
+    let thread = Thread.withListing(Thread.EMPTY, {
+      peers: [
+        { name: 'flow-1d', kind: 'interactive', status: 'idle' },
+        { name: 'web-2a', kind: 'interactive', status: 'idle' },
+        { name: 'web-3b', kind: 'interactive', status: 'idle' },
+        { name: 'app-4c', kind: 'interactive', status: 'idle' },
+        { name: 'app-5d', kind: 'interactive', status: 'idle' },
+        { name: 'Commande chmod 600', kind: 'Remote Control', status: 'offline' },
+      ],
+    })
+
+    thread = Thread.withDirectory(thread, [
+      { id: 'S1aa', name: 'flow-1d', project: 'claude-flow', topic: '#61' },
+      { id: 'S2bb', name: 'web-2a', project: 'web' },
+      { id: 'S3cc', name: 'web-3b', project: 'web' },
+    ])
+    thread = Thread.withTitle(thread, 'S3cc', 'the other web')
+
+    expect(
+      Thread.titlesOf(thread, ['S1aa', 'S2bb', 'S3cc', 'app-4c', 'app-5d', 'Commande chmod 600']),
+    ).toEqual({
+      S1aa: 'claude-flow · #61',
+      S2bb: 'web',
+      S3cc: 'the other web',
+      'app-4c': 'app-4c',
+      'app-5d': 'app-5d',
+      'Commande chmod 600': 'Commande chmod 600',
+    })
+
+    const twins = Thread.withTitle(thread, 'S3cc', '')
+
+    expect(Thread.titlesOf(twins, ['S2bb', 'S3cc']), 'one project, no topic: by id').toEqual({
+      S2bb: 'web · S2bb',
+      S3cc: 'web · S3cc',
+    })
+    expect(Thread.titlesOf(thread, ['app-4c']), 'alone, a name loses its suffix').toEqual({
+      'app-4c': 'app',
+    })
+  })
+
+  test("ListAgents' kinds as Herdr reads them", async () => {
+    expect(['interactive', 'Remote Control', 'cloud', 'bg'].map(Thread.kindOf)).toEqual([
+      'interactive',
+      'remote',
+      'cloud',
+      'background',
+    ])
+  })
+
+  test('what is known of a peer and when it was seen are saved; the name map is not', async () => {
+    let thread = Thread.withListing(
+      Thread.EMPTY,
+      { peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }] },
+      7,
+    )
+
+    thread = Thread.withDirectory(thread, [{ id: 'S1', name: 'api-1d', project: 'api' }])
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1', text: 'x', at: 8 })
+
+    const back = Thread.fromSaved(JSON.parse(JSON.stringify(Thread.toSaved(thread, 9))))
+
+    expect(back?.known).toEqual({ S1: { name: 'api-1d', project: 'api' } })
+    expect(back?.seen).toEqual({ S1: 7 })
+    expect(back?.ids).toEqual({})
+    expect(back?.titles, 'titles live in the shared store').toEqual({})
+  })
+
   test('read up to a time: only what came in after it stays unread', async () => {
     let thread = Thread.EMPTY
 
