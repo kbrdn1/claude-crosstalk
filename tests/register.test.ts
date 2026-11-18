@@ -52,6 +52,8 @@ function world(
   const writes: { holdNext?: Promise<void> } = {}
   // Whether the store refuses every save.
   const saves = { isFull: false }
+  // What ListAgents answers.
+  const agents = { listing: LISTING }
   let version = 0
 
   // What the next `clock.now` waits for before it answers: mock.clock owns
@@ -117,6 +119,22 @@ function world(
       ? missing
       : { value: { kind: 'file', size: file.text.length, mtimeMs: file.mtimeMs, isLink: false } }
   })
+  on('fs.list', ($, e) => {
+    fsCalls.push(`list ${e.path}`)
+
+    const prefix = `${e.path ?? ''}/`
+    const entries = [...files]
+      .filter(([path]) => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))
+      .map(([path, file]) => ({
+        name: path.slice(prefix.length),
+        kind: 'file' as const,
+        size: file.text.length,
+        mtimeMs: file.mtimeMs,
+        isLink: false,
+      }))
+
+    return { value: entries }
+  })
   on('process.run', ($, e) => {
     runs.push(e.argv)
 
@@ -161,7 +179,7 @@ function world(
   on('tool.call', { tool: 'ListAgents' }, () => {
     listings.push(clock.now())
 
-    return { result: { listing: LISTING } }
+    return { result: { listing: agents.listing } }
   })
   on('tool.call', { tool: 'SendMessage' }, ($, e) => {
     sent.push(e)
@@ -215,9 +233,13 @@ function world(
     writes,
     saves,
     nowHold,
+    agents,
     // Herdr writing its outbox, as a new file each time.
     outbox: (value: unknown) =>
       files.set(OUTBOX, { text: JSON.stringify(value), mtimeMs: ++version }),
+    // Another terminal's file in Herdr's folder, a newer one each time.
+    herdrFile: (name: string, value: unknown) =>
+      files.set(`${HERDR}/${name}`, { text: JSON.stringify(value), mtimeMs: ++version }),
     // What crosstalk last published for Herdr.
     published: (): Thread.Publication => JSON.parse(files.get(PUBLICATION)?.text ?? 'null'),
   }
@@ -1107,5 +1129,94 @@ describe('herdr', () => {
     await w.clock.advance(REFRESH_MS)
 
     expect(w.listings).toHaveLength(before + 1)
+  })
+})
+
+// The session another Herdr terminal (t3) publishes, listed here as `api`,
+// and its claude-flow file.
+const API_SESSION = {
+  v: 2,
+  session: { id: 'S-api', name: 'api', terminal: 't3', project: 'api-repo' },
+  peers: [],
+  threads: {},
+  handled: {},
+}
+const API_FLOW = {
+  v: 1,
+  workflow: 'me:issue-worktree-pr',
+  steps: [{ id: 'issue', label: 'issue #61', state: 'done' }],
+}
+
+describe('names', () => {
+  test('in Herdr, a peer another terminal publishes is filed under its session id', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.herdrFile('t3.flow.json', API_FLOW)
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')).toMatchObject({
+      key: 'S-api',
+      sessionId: 'S-api',
+      title: 'api-repo · #61',
+      project: 'api-repo',
+      topic: '#61',
+      live: true,
+    })
+    expect(w.published().threads['S-api']?.map(m => m.text)).toEqual(['ready?'])
+
+    w.outbox({ v: 2, send: [{ id: 'h1', to: 'S-api', text: 'yes' }] })
+    await w.clock.advance(OUTBOX_MS)
+
+    expect(
+      w.sent.map(e => Reflect.get(e, 'to')),
+      'a reply goes to its live name',
+    ).toEqual(['api'])
+  })
+
+  test('a peer restarted under a new name keeps its conversation', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'before'))
+    w.agents.listing = LISTING.replace('api [a1aa87]', 'api-1d [b2bb22]')
+    w.herdrFile('t3.crosstalk.json', {
+      ...API_SESSION,
+      session: { ...API_SESSION.session, name: 'api-1d' },
+    })
+    await w.clock.advance(REFRESH_MS)
+    await $.session.receive(fromPeer('api-1d', 'after'))
+    await w.clock.settle()
+
+    expect(Object.keys(w.published().threads)).toEqual(['S-api'])
+    expect(w.published().threads['S-api']?.map(m => m.text)).toEqual(['before', 'after'])
+  })
+
+  test("other terminals' files are read again only once changed, never this one's", async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    await $.session.start(SESSION)
+    await w.clock.advance(REFRESH_MS * 2)
+
+    expect(w.fsCalls.filter(call => call === `read ${HERDR}/t3.crosstalk.json`)).toHaveLength(1)
+    expect(w.fsCalls).not.toContain(`read ${PUBLICATION}`)
+  })
+
+  test('when two terminals claim one name, the newest file says who it is', async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', API_SESSION)
+    w.herdrFile('t4.crosstalk.json', {
+      ...API_SESSION,
+      session: { ...API_SESSION.session, id: 'S-new', terminal: 't4' },
+    })
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe('S-new')
   })
 })

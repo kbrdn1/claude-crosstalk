@@ -1,5 +1,6 @@
 import type {
   EngineInterface,
+  FsEntry,
   FsStat,
   ProcessRunResult,
   Register,
@@ -63,6 +64,7 @@ type Host = {
   read: (path: string) => Promise<string>
   write: (path: string, text: string) => Promise<void>
   stat: (path: string) => Promise<FsStat>
+  list: (path: string) => Promise<FsEntry[]>
   run: (argv: readonly string[]) => Promise<ProcessRunResult>
 }
 
@@ -171,7 +173,10 @@ export const register: Register = on => {
   let ring: string | undefined
   // In Herdr: where this session publishes its conversations, and where
   // Herdr leaves what to send. Undefined outside it, where nothing is written.
-  let herdr: { file: string; outbox: string } | undefined
+  let herdr: { dir: string; file: string; outbox: string } | undefined
+  // Herdr's folder, each file read as it stood (mtime and size): another
+  // terminal's publication is read again only once it changed.
+  const directory = new Map<string, { stamp: string; value: unknown }>()
   let sessionId = ''
   // This session as it publishes itself to Herdr: its id, terminal, folder
   // and project.
@@ -352,14 +357,92 @@ export const register: Register = on => {
       .catch(() => undefined)
   }
 
+  /**
+   * The sessions the other Herdr terminals publish, each with its project
+   * and its claude-flow topic. A name two files claim is the newest file's
+   * (the other one's terminal is gone); this session's own file is skipped.
+   */
+  async function readDirectory(): Promise<Thread.Session[]> {
+    const via = host
+    const target = herdr
+
+    if (via === undefined || target === undefined) {
+      return []
+    }
+
+    const entries = await via.list(target.dir).catch(() => [])
+    const stamps = new Map(entries.map(entry => [entry.name, `${entry.mtimeMs}:${entry.size}`]))
+    const read = async <T>(name: string, parse: (text: string) => T): Promise<T | undefined> => {
+      const stamp = stamps.get(name)
+      const hit = directory.get(name)
+
+      if (stamp === undefined) {
+        return undefined
+      }
+
+      if (hit?.stamp === stamp) {
+        return hit.value as T | undefined
+      }
+
+      const value = parse((await via.read(`${target.dir}/${name}`).catch(() => '')) ?? '')
+
+      directory.set(name, { stamp, value })
+
+      return value
+    }
+    const publications = entries
+      .filter(entry => entry.name.endsWith('.crosstalk.json'))
+      .filter(entry => `${target.dir}/${entry.name}` !== target.file)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    const sessions = new Map<string, Thread.Session>()
+
+    for (const entry of publications) {
+      const published = await read(entry.name, Thread.sessionOf)
+
+      if (published === undefined || published.id === sessionId || sessions.has(published.name)) {
+        continue
+      }
+
+      const { id, name, terminal, project } = published
+      const topic =
+        terminal === undefined ? undefined : await read(`${terminal}.flow.json`, Thread.topicOf)
+
+      sessions.set(name, {
+        id,
+        name,
+        ...(project === undefined ? {} : { project }),
+        ...(topic === undefined ? {} : { topic }),
+      })
+    }
+
+    for (const name of directory.keys()) {
+      if (!stamps.has(name)) directory.delete(name)
+    }
+
+    return [...sessions.values()]
+  }
+
   async function refreshPeers(): Promise<void> {
     const result = await host?.call({ tool: 'ListAgents' }).catch(() => undefined)
     const record: unknown = result?.result
     const listing =
       typeof record === 'object' && record ? Reflect.get(record, 'listing') : undefined
 
-    if (typeof listing === 'string') {
-      thread = Thread.withListing(thread, Thread.listingOf(listing))
+    if (typeof listing !== 'string' || host === undefined) {
+      return
+    }
+
+    const at = await host.now()
+    const sessions = herdr === undefined ? undefined : await readDirectory()
+    // The thread read after every wait: nothing that landed meanwhile is lost.
+    const listed = Thread.withListing(thread, Thread.listingOf(listing), at)
+    const next = sessions === undefined ? listed : Thread.withDirectory(listed, sessions)
+
+    if (next.entries !== listed.entries) {
+      // A conversation moved to its session id: kept for the next start.
+      await commit(next)
+    } else {
+      thread = next
       redraw()
     }
   }
@@ -443,8 +526,17 @@ export const register: Register = on => {
 
     const at = await host.now()
     const message = text.trim()
-    const isKnown = Thread.conversationsOf(thread).some(c => c.peer === to)
-    const refusal = !isKnown ? `unknown peer: ${to}` : message === '' ? 'empty message' : undefined
+    // Every peer the publication lists, by key; `to` is a key or a name.
+    const keys = new Set([
+      ...Thread.conversationsOf(thread).map(c => c.peer),
+      ...thread.peers.map(listed => Thread.keyOf(thread, listed.name)),
+    ])
+    const key = keys.has(to) ? to : Thread.keyOf(thread, to)
+    const refusal = !keys.has(key)
+      ? `unknown peer: ${to}`
+      : message === ''
+        ? 'empty message'
+        : undefined
     const answer = (result: Thread.Handled) =>
       commit(Thread.withHandled(thread, id, result, listed))
 
@@ -461,7 +553,7 @@ export const register: Register = on => {
       return
     }
 
-    const failure = await send(to, message, id)
+    const failure = await send(key, message, id)
 
     await answer(
       failure === undefined ? { status: 'sent', at } : { status: 'refused', reason: failure, at },
@@ -501,7 +593,7 @@ export const register: Register = on => {
       }
 
       const read = Object.entries(outbox.read).reduce(
-        (next, [peer, at]) => Thread.readUpTo(next, peer, at),
+        (next, [peer, at]) => Thread.readUpTo(next, Thread.keyOf(next, peer), at),
         thread,
       )
 
@@ -533,7 +625,11 @@ export const register: Register = on => {
     sessionId = id
     herdr =
       e.isInteractive && terminal && home
-        ? { file: `${base}.crosstalk.json`, outbox: `${base}.crosstalk-outbox.json` }
+        ? {
+            dir: `${home}/.claude/cache/herdr`,
+            file: `${base}.crosstalk.json`,
+            outbox: `${base}.crosstalk-outbox.json`,
+          }
         : undefined
 
     if (herdr !== undefined && terminal) {
@@ -572,6 +668,7 @@ export const register: Register = on => {
       read: path => $.fs.read(path),
       write: (path, text) => $.fs.write(path, text),
       stat: path => $.fs.stat(path),
+      list: path => $.fs.list(path),
       run: argv => $.process.run(argv),
     }
 
@@ -626,10 +723,12 @@ export const register: Register = on => {
       return next(e)
     }
 
-    const { peer, text, address } = Thread.inboundOf(e.text)
+    const { peer: name, text, address } = Thread.inboundOf(e.text)
     // The time first: the thread is read after it, so a Herdr send that
     // landed during the wait is not overwritten.
     const at = await $.clock.now()
+    // Filed under the sender's session id when Herdr's directory knows it.
+    const peer = Thread.keyOf(thread, name)
     const known = Thread.withAlias(thread, address, peer)
 
     holdPlace(peer)

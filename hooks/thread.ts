@@ -392,10 +392,80 @@ export function withDirectory(thread: Thread, sessions: readonly Session[]): Thr
   }
 
   for (const { id, name } of named) {
-    next = renamed(next, name, id)
+    if (isFiled(next, name)) {
+      next = renamed(next, name, id)
+    }
   }
 
   return next
+}
+
+/**
+ * Whether anything is filed under `key`.
+ */
+function isFiled(thread: Thread, key: string): boolean {
+  return (
+    thread.selected === key ||
+    thread.entries.some(entry => entry.peer === key) ||
+    Object.values(thread.aliases).includes(key) ||
+    [thread.unread, thread.titles, thread.seen, thread.known].some(record =>
+      Object.hasOwn(record, key),
+    )
+  )
+}
+
+/**
+ * What another terminal's publication says of its session: id, live name,
+ * terminal, project. Undefined without a name to map, or for a file caught
+ * mid-write.
+ */
+export function sessionOf(
+  text: string,
+): { id: string; name: string; terminal?: string; project?: string } | undefined {
+  let value: unknown
+
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+
+  const session = isRecord(value) && isRecord(value.session) ? value.session : {}
+  const { id, name, terminal, project } = session
+
+  if (typeof id !== 'string' || typeof name !== 'string' || id === '' || name === '') {
+    return undefined
+  }
+
+  return {
+    id,
+    name,
+    ...(typeof terminal === 'string' ? { terminal } : {}),
+    ...(typeof project === 'string' ? { project } : {}),
+  }
+}
+
+/**
+ * What a terminal's claude-flow file says it works on: its issue (`#61`),
+ * else its branch.
+ */
+export function topicOf(text: string): string | undefined {
+  let value: unknown
+
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+
+  const steps = isRecord(value) && Array.isArray(value.steps) ? value.steps.filter(isRecord) : []
+  const labelOf = (id: string) => {
+    const label = steps.find(step => step.id === id)?.label
+
+    return typeof label === 'string' ? label.replace(new RegExp(`^${id}\\s+`), '') : undefined
+  }
+
+  return labelOf('issue') ?? labelOf('branch')
 }
 
 /**
@@ -857,7 +927,9 @@ export function herdrOf(thread: Thread, self: Self, updatedAt: number): Publicat
       ...(topic === undefined ? {} : { topic }),
       ...(listed === undefined ? {} : { kind: kindOf(listed.kind), status: listed.status }),
       live: listed !== undefined,
-      ...(seen === undefined ? {} : { lastSeenAt: seen }),
+      // A listed session is seen now: its time would rewrite the file at
+      // every listing for nothing.
+      ...(seen === undefined || listed !== undefined ? {} : { lastSeenAt: seen }),
       ...(last?.at === undefined ? {} : { lastMessageAt: last.at }),
       unread,
       ...(last === undefined ? {} : { last: { ...herdrMessageOf(last), id: undefined } }),

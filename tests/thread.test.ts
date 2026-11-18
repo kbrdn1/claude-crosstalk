@@ -254,6 +254,41 @@ describe('thread', () => {
     })
   })
 
+  test("another terminal's publication gives its session; its flow file, the topic", async () => {
+    expect(
+      Thread.sessionOf(
+        JSON.stringify({
+          v: 2,
+          session: { id: 'S1', name: 'flow-1d', terminal: 't3', project: 'claude-flow' },
+          peers: [],
+        }),
+      ),
+    ).toEqual({ id: 'S1', name: 'flow-1d', terminal: 't3', project: 'claude-flow' })
+    expect(
+      Thread.sessionOf(JSON.stringify({ v: 1, session: { id: 'S2', name: 'old' } })),
+      'a v1 publication names its session too',
+    ).toEqual({ id: 'S2', name: 'old' })
+    expect(
+      Thread.sessionOf('{"v":2,"session":{"id":"S3"}}'),
+      'no name: nothing to map',
+    ).toBeUndefined()
+    expect(Thread.sessionOf('{"v":2,"session":'), 'caught mid-write').toBeUndefined()
+
+    const flow = (steps: unknown[]) => JSON.stringify({ v: 1, workflow: 'me:x', steps })
+
+    expect(
+      Thread.topicOf(
+        flow([
+          { id: 'issue', label: 'issue #61', state: 'done' },
+          { id: 'branch', label: 'branch feat/#61-x', state: 'done' },
+        ]),
+      ),
+    ).toBe('#61')
+    expect(Thread.topicOf(flow([{ id: 'branch', label: 'branch fix/#9-y' }]))).toBe('fix/#9-y')
+    expect(Thread.topicOf(flow([]))).toBeUndefined()
+    expect(Thread.topicOf('not json')).toBeUndefined()
+  })
+
   test("ListAgents' kinds as Herdr reads them", async () => {
     expect(['interactive', 'Remote Control', 'cloud', 'bg'].map(Thread.kindOf)).toEqual([
       'interactive',
@@ -527,13 +562,19 @@ describe('thread', () => {
         kind: 'interactive',
         status: 'idle',
         live: true,
-        lastSeenAt: 7,
         lastMessageAt: 8,
         unread: 0,
         last: { dir: 'out', text: 'on it', at: 8 },
       },
     ])
     expect(published.threads).toEqual({ S1aa: [{ dir: 'out', text: 'on it', at: 8 }] })
+
+    const gone = Thread.withListing(thread, { peers: [] }, 10)
+
+    expect(
+      Thread.herdrOf(gone, { id: 's1' }, 11).peers[0],
+      'once no longer listed, when it was last seen',
+    ).toMatchObject({ key: 'S1aa', live: false, lastSeenAt: 7 })
   })
 
   test("Herdr's outbox: its sends and read marks; anything else is none", async () => {
