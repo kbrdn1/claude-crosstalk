@@ -202,6 +202,22 @@ describe('thread', () => {
     ])
   })
 
+  test('a pending id whose message is in the thread comes back sent', async () => {
+    let thread = Thread.record(Thread.EMPTY, {
+      dir: 'out',
+      peer: 'api',
+      text: 'x',
+      at: 1,
+      id: 'h1',
+    })
+
+    thread = Thread.withHandled(thread, 'h1', { status: 'pending', at: 1 })
+
+    expect(
+      Thread.fromSaved(JSON.parse(JSON.stringify(Thread.toSaved(thread, 2))))?.handled,
+    ).toEqual({ h1: { status: 'sent', at: 1 } })
+  })
+
   test('handled ids are saved; one a reload cut off mid-send comes back refused', async () => {
     let thread = Thread.record(Thread.EMPTY, {
       dir: 'out',

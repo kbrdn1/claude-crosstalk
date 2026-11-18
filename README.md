@@ -198,7 +198,8 @@ half of one.
 - Each `send` entry goes out once per `id`, the way the pane's reply does:
   `SendMessage` to the peer's `address`, then the message in its thread.
   The id is saved before the send, so a reload never sends it twice; one a
-  reload cut off mid-send comes back `refused` (it may have gone).
+  reload cut off mid-send comes back `sent` when its message made it into
+  the thread, else `refused` (it may have gone).
 - `to` must be the `name` of one of the published `peers`, and `text` must
   say something: otherwise the entry is refused and nothing is sent. Nothing
   else in the file runs anything.

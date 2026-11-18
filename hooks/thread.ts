@@ -332,15 +332,16 @@ function isEntry(value: unknown): value is Entry {
 }
 
 /**
- * A saved outbox result, a pending one as the reload left it: refused,
- * never sent again.
+ * A saved outbox result. A pending one is as the reload left it: sent when
+ * its message made it into the thread (`isRecorded`), else refused, never
+ * sent again.
  */
-function handledOf(value: unknown): Handled | undefined {
+function handledOf(value: unknown, isRecorded: boolean): Handled | undefined {
   if (!isRecord(value) || typeof value.at !== 'number') {
     return undefined
   }
 
-  if (value.status === 'sent') {
+  if (value.status === 'sent' || (value.status === 'pending' && isRecorded)) {
     return { status: 'sent', at: value.at }
   }
 
@@ -366,14 +367,16 @@ export function fromSaved(value: unknown): Thread | undefined {
       (pair): pair is [string, string] => typeof pair[1] === 'string',
     ),
   )
+  const entries = value.entries.filter(isEntry)
+  const recorded = new Set(entries.map(entry => entry.id))
   const handled = Object.fromEntries(
     Object.entries(isRecord(value.handled) ? value.handled : {}).flatMap(([id, result]) => {
-      const known = handledOf(result)
+      const known = handledOf(result, recorded.has(id))
 
       return known === undefined ? [] : [[id, known]]
     }),
   )
-  const thread = { ...EMPTY, entries: value.entries.filter(isEntry), aliases, handled }
+  const thread = { ...EMPTY, entries, aliases, handled }
 
   return typeof value.selected === 'string' ? { ...thread, selected: value.selected } : thread
 }
