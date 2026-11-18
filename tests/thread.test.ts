@@ -153,6 +153,7 @@ describe('thread', () => {
     thread = Thread.record(thread, { dir: 'in', peer: 'api', text: 'b', at: 2 })
     thread = Thread.record(thread, { dir: 'in', peer: 'api', text: 'c', at: 3 })
     thread = Thread.record(thread, { dir: 'in', peer: 'web', text: 'd', at: 3 })
+    thread = Thread.record(thread, { dir: 'out', peer: 'api', text: 'a reply is no unread', at: 4 })
 
     expect(Thread.readUpTo(thread, 'api', 2).unread).toEqual({ api: 1, web: 1 })
     expect(Thread.readUpTo(thread, 'api', 3).unread).toEqual({ web: 1 })
@@ -246,11 +247,17 @@ describe('thread', () => {
 
     thread = Thread.withHandled(thread, 'h1', { status: 'sent', at: 1 })
     thread = Thread.withHandled(thread, 'h2', { status: 'pending', at: 2 })
+    thread = Thread.withHandled(thread, 'h3', {
+      status: 'refused',
+      reason: 'unknown peer: x',
+      at: 3,
+    })
 
     const back = Thread.fromSaved(JSON.parse(JSON.stringify(Thread.toSaved(thread, 3))))
 
     expect(back?.entries[0]?.id).toBe('h1')
     expect(back?.handled.h1).toEqual({ status: 'sent', at: 1 })
+    expect(back?.handled.h3).toEqual({ status: 'refused', reason: 'unknown peer: x', at: 3 })
     expect(back?.handled.h2).toEqual({
       status: 'refused',
       reason: Thread.INTERRUPTED,
