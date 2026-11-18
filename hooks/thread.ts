@@ -14,6 +14,8 @@ export type Entry = {
   text: string
   // When it passed; absent where the source kept no time.
   at?: number
+  // The id Herdr gave it in its outbox; absent for every other message.
+  id?: string
 }
 
 export type Peer = {
@@ -32,7 +34,18 @@ export type Thread = {
   // (`from-name`): a model answers a peer at its address, the pane files the
   // answer under its name.
   aliases: Readonly<Record<string, string>>
+  // What became of each Herdr outbox entry, by its id.
+  handled: Readonly<Record<string, Handled>>
 }
+
+/**
+ * What became of one Herdr outbox entry: sent, refused and why, or pending
+ * while its SendMessage runs (saved first, so a reload never sends it twice).
+ */
+export type Handled =
+  | { status: 'sent'; at: number }
+  | { status: 'refused'; reason: string; at: number }
+  | { status: 'pending'; at: number }
 
 export type Conversation = {
   peer: string
@@ -49,15 +62,23 @@ export type Saved = {
   entries: Entry[]
   selected?: string
   aliases: Record<string, string>
+  handled?: Record<string, Handled>
 }
 
-export const EMPTY: Thread = { entries: [], peers: [], unread: {}, aliases: {} }
+export const EMPTY: Thread = { entries: [], peers: [], unread: {}, aliases: {}, handled: {} }
 
 // ponytail: one flat cap for the whole session, per-peer caps if a chatty
 // peer ends up pushing the others' history out.
 export const MAX_ENTRIES = 200
 
 export const UNKNOWN_PEER = 'unknown session'
+
+// How many Herdr outbox ids are remembered: Herdr drops an entry once it is
+// answered, so only a stale outbox could hold one older than these.
+export const MAX_HANDLED = 200
+
+// Why an outbox entry left pending by a reload is not sent again.
+export const INTERRUPTED = 'interrupted by a reload before its result: it may have been sent'
 
 /**
  * The session journal lines worth parsing: a peer delivery (its `origin`),
@@ -285,7 +306,12 @@ export function unreadCount(thread: Thread): number {
  * What to keep in `$.store`.
  */
 export function toSaved(thread: Thread, now: number): Saved {
-  const saved = { savedAt: now, entries: [...thread.entries], aliases: { ...thread.aliases } }
+  const saved = {
+    savedAt: now,
+    entries: [...thread.entries],
+    aliases: { ...thread.aliases },
+    handled: { ...thread.handled },
+  }
 
   return thread.selected === undefined ? saved : { ...saved, selected: thread.selected }
 }
@@ -300,8 +326,31 @@ function isEntry(value: unknown): value is Entry {
     (value.dir === 'in' || value.dir === 'out') &&
     typeof value.peer === 'string' &&
     typeof value.text === 'string' &&
-    (value.at === undefined || typeof value.at === 'number')
+    (value.at === undefined || typeof value.at === 'number') &&
+    (value.id === undefined || typeof value.id === 'string')
   )
+}
+
+/**
+ * A saved outbox result, a pending one as the reload left it: refused,
+ * never sent again.
+ */
+function handledOf(value: unknown): Handled | undefined {
+  if (!isRecord(value) || typeof value.at !== 'number') {
+    return undefined
+  }
+
+  if (value.status === 'sent') {
+    return { status: 'sent', at: value.at }
+  }
+
+  if (value.status === 'pending') {
+    return { status: 'refused', reason: INTERRUPTED, at: value.at }
+  }
+
+  return value.status === 'refused' && typeof value.reason === 'string'
+    ? { status: 'refused', reason: value.reason, at: value.at }
+    : undefined
 }
 
 /**
@@ -317,7 +366,14 @@ export function fromSaved(value: unknown): Thread | undefined {
       (pair): pair is [string, string] => typeof pair[1] === 'string',
     ),
   )
-  const thread = { ...EMPTY, entries: value.entries.filter(isEntry), aliases }
+  const handled = Object.fromEntries(
+    Object.entries(isRecord(value.handled) ? value.handled : {}).flatMap(([id, result]) => {
+      const known = handledOf(result)
+
+      return known === undefined ? [] : [[id, known]]
+    }),
+  )
+  const thread = { ...EMPTY, entries: value.entries.filter(isEntry), aliases, handled }
 
   return typeof value.selected === 'string' ? { ...thread, selected: value.selected } : thread
 }
@@ -431,4 +487,144 @@ export function fromJournal(lines: readonly string[]): Thread {
   const selected = thread.entries.at(-1)?.peer
 
   return selected === undefined ? thread : { ...thread, unread: {}, selected }
+}
+
+/**
+ * The thread with what became of Herdr's outbox entry `id`, the MAX_HANDLED
+ * most recent kept.
+ */
+export function withHandled(thread: Thread, id: string, result: Handled): Thread {
+  const { [id]: _before, ...rest } = thread.handled
+
+  return {
+    ...thread,
+    handled: Object.fromEntries([...Object.entries(rest), [id, result]].slice(-MAX_HANDLED)),
+  }
+}
+
+/**
+ * The thread with `peer`'s messages up to `at` read: only those that came in
+ * after it stay unread, never more than before.
+ */
+export function readUpTo(thread: Thread, peer: string, at: number): Thread {
+  const after = thread.entries.filter(
+    entry => entry.peer === peer && entry.dir === 'in' && (entry.at ?? 0) > at,
+  ).length
+  const { [peer]: count = 0, ...unread } = thread.unread
+  const left = Math.min(count, after)
+
+  return left === count
+    ? thread
+    : { ...thread, unread: left > 0 ? { ...unread, [peer]: left } : unread }
+}
+
+/**
+ * One message as Herdr reads it.
+ */
+export type HerdrMessage = { dir: Direction; text: string; at?: number; id?: string }
+
+/**
+ * What crosstalk publishes for Herdr: the contract of the README's Herdr
+ * section, version `v`.
+ */
+export type Publication = {
+  v: 1
+  session: { id: string; name?: string }
+  updatedAt: number
+  peers: {
+    name: string
+    address: string
+    status?: string
+    unread: number
+    last?: HerdrMessage
+  }[]
+  threads: Record<string, HerdrMessage[]>
+  handled: Record<string, Handled>
+}
+
+function herdrMessageOf({ dir, text, at, id }: Entry): HerdrMessage {
+  return { dir, text, ...(at === undefined ? {} : { at }), ...(id === undefined ? {} : { id }) }
+}
+
+/**
+ * The publication for session `id`: every conversation as the inbox orders
+ * it, each one's messages oldest first, and each outbox entry's result
+ * (a pending one is not one yet).
+ */
+export function herdrOf(thread: Thread, id: string, updatedAt: number): Publication {
+  const threads: Record<string, HerdrMessage[]> = {}
+
+  for (const entry of thread.entries) {
+    ;(threads[entry.peer] ??= []).push(herdrMessageOf(entry))
+  }
+
+  return {
+    v: 1,
+    session: thread.self === undefined ? { id } : { id, name: thread.self },
+    updatedAt,
+    peers: conversationsOf(thread).map(({ peer, status, unread, last }) => ({
+      name: peer,
+      address: addressOf(thread, peer),
+      ...(status === undefined ? {} : { status }),
+      unread,
+      ...(last === undefined ? {} : { last: { ...herdrMessageOf(last), id: undefined } }),
+    })),
+    threads,
+    handled: Object.fromEntries(
+      Object.entries(thread.handled).filter(([, result]) => result.status !== 'pending'),
+    ),
+  }
+}
+
+/**
+ * One message Herdr asks to send: `to` a conversation's name.
+ */
+export type Outgoing = { id: string; to: string; text: string }
+
+/**
+ * What Herdr's outbox asks: messages to send, and each conversation read up
+ * to a time.
+ */
+export type Outbox = { send: Outgoing[]; read: Record<string, number> }
+
+/**
+ * What Herdr's outbox asks of session `session`, or undefined when its text
+ * is no JSON (a file caught mid-write). An outbox of another version, or
+ * written for another session of the terminal, asks nothing. An entry
+ * without an id has nothing to be answered by and is left out; a `to` or a
+ * text of the wrong type is empty, which the send refuses.
+ */
+export function outboxOf(text: string, session: string): Outbox | undefined {
+  let value: unknown
+
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+
+  const record = isRecord(value) ? value : {}
+
+  if (record.v !== 1 || (record.session !== undefined && record.session !== session)) {
+    return { send: [], read: {} }
+  }
+
+  const send = (Array.isArray(record.send) ? record.send : []).flatMap(entry =>
+    isRecord(entry) && typeof entry.id === 'string' && entry.id !== ''
+      ? [
+          {
+            id: entry.id,
+            to: typeof entry.to === 'string' ? entry.to : '',
+            text: typeof entry.text === 'string' ? entry.text : '',
+          },
+        ]
+      : [],
+  )
+  const read = Object.fromEntries(
+    Object.entries(isRecord(record.read) ? record.read : {}).filter(
+      (pair): pair is [string, number] => typeof pair[1] === 'number',
+    ),
+  )
+
+  return { send, read }
 }

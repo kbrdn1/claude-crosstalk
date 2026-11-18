@@ -145,4 +145,144 @@ describe('thread', () => {
     expect(thread.entries).toHaveLength(Thread.MAX_ENTRIES)
     expect(thread.entries[0]?.text).toBe('5')
   })
+
+  test('read up to a time: only what came in after it stays unread', async () => {
+    let thread = Thread.EMPTY
+
+    thread = Thread.record(thread, { dir: 'in', peer: 'api', text: 'a', at: 1 })
+    thread = Thread.record(thread, { dir: 'in', peer: 'api', text: 'b', at: 2 })
+    thread = Thread.record(thread, { dir: 'in', peer: 'api', text: 'c', at: 3 })
+    thread = Thread.record(thread, { dir: 'in', peer: 'web', text: 'd', at: 3 })
+
+    expect(Thread.readUpTo(thread, 'api', 2).unread).toEqual({ api: 1, web: 1 })
+    expect(Thread.readUpTo(thread, 'api', 3).unread).toEqual({ web: 1 })
+    expect(
+      Thread.readUpTo(Thread.select(thread, 'api'), 'api', 0).unread,
+      'never more unread than before',
+    ).toEqual({ web: 1 })
+  })
+
+  test('a handled outbox id is kept, the most recent ones only', async () => {
+    let thread = Thread.EMPTY
+
+    for (let at = 0; at < Thread.MAX_HANDLED + 5; at++) {
+      thread = Thread.withHandled(thread, `id-${at}`, { status: 'sent', at })
+    }
+
+    expect(Object.keys(thread.handled)).toHaveLength(Thread.MAX_HANDLED)
+    expect(thread.handled['id-4']).toBeUndefined()
+    expect(thread.handled['id-5']).toEqual({ status: 'sent', at: 5 })
+  })
+
+  test('handled ids are saved; one a reload cut off mid-send comes back refused', async () => {
+    let thread = Thread.record(Thread.EMPTY, {
+      dir: 'out',
+      peer: 'api',
+      text: 'from herdr',
+      at: 1,
+      id: 'h1',
+    })
+
+    thread = Thread.withHandled(thread, 'h1', { status: 'sent', at: 1 })
+    thread = Thread.withHandled(thread, 'h2', { status: 'pending', at: 2 })
+
+    const back = Thread.fromSaved(JSON.parse(JSON.stringify(Thread.toSaved(thread, 3))))
+
+    expect(back?.entries[0]?.id).toBe('h1')
+    expect(back?.handled.h1).toEqual({ status: 'sent', at: 1 })
+    expect(back?.handled.h2).toEqual({
+      status: 'refused',
+      reason: Thread.INTERRUPTED,
+      at: 2,
+    })
+  })
+
+  test("Herdr's view: the session, each conversation, its messages, each outbox result", async () => {
+    let thread = Thread.withListing(Thread.EMPTY, Thread.listingOf(LISTING))
+
+    thread = Thread.withAlias(thread, 'uds:/9.sock', 'gone')
+    thread = Thread.record(thread, { dir: 'in', peer: 'gone', text: 'bye', at: 1 })
+    thread = Thread.record(thread, { dir: 'in', peer: 'api', text: '**ready?**', at: 2 })
+    thread = Thread.record(thread, { dir: 'out', peer: 'api', text: 'yes', at: 3, id: 'h1' })
+    thread = Thread.withHandled(thread, 'h1', { status: 'sent', at: 3 })
+    thread = Thread.withHandled(thread, 'h2', { status: 'refused', reason: 'unknown peer', at: 4 })
+    thread = Thread.withHandled(thread, 'h3', { status: 'pending', at: 5 })
+
+    expect(Thread.herdrOf(thread, 's1', 9)).toEqual({
+      v: 1,
+      session: { id: 's1', name: 'claude-98' },
+      updatedAt: 9,
+      peers: [
+        {
+          name: 'api',
+          address: 'api',
+          status: 'idle',
+          unread: 1,
+          last: { dir: 'out', text: 'yes', at: 3 },
+        },
+        {
+          name: 'gone',
+          address: 'uds:/9.sock',
+          unread: 1,
+          last: { dir: 'in', text: 'bye', at: 1 },
+        },
+        { name: 'web', address: 'web', status: 'busy', unread: 0 },
+      ],
+      threads: {
+        gone: [{ dir: 'in', text: 'bye', at: 1 }],
+        api: [
+          { dir: 'in', text: '**ready?**', at: 2 },
+          { dir: 'out', text: 'yes', at: 3, id: 'h1' },
+        ],
+      },
+      handled: {
+        h1: { status: 'sent', at: 3 },
+        h2: { status: 'refused', reason: 'unknown peer', at: 4 },
+      },
+    })
+    expect(Thread.herdrOf(Thread.EMPTY, 's1', 0).session, 'no name before a listing').toEqual({
+      id: 's1',
+    })
+  })
+
+  test("Herdr's outbox: its sends and read marks; anything else is none", async () => {
+    expect(
+      Thread.outboxOf(
+        JSON.stringify({
+          session: 's1',
+          v: 1,
+          send: [
+            { id: 'h1', to: 'api', text: 'hi', at: 1 },
+            { id: 'h2', to: 3, text: null },
+            { to: 'api', text: 'no id, no answer' },
+          ],
+          read: { api: 5, web: 'soon' },
+        }),
+        's1',
+      ),
+    ).toEqual({
+      send: [
+        { id: 'h1', to: 'api', text: 'hi' },
+        { id: 'h2', to: '', text: '' },
+      ],
+      read: { api: 5 },
+    })
+    expect(Thread.outboxOf('{"v":1}', 's1'), 'no session named: this one').toEqual({
+      send: [],
+      read: {},
+    })
+    expect(
+      Thread.outboxOf('{"v":1,"send":[{"id":"h1"', 's1'),
+      'a half-written file',
+    ).toBeUndefined()
+  })
+
+  test('an outbox for another session, or of another version, asks nothing', async () => {
+    const asks = { send: [{ id: 'h1', to: 'api', text: 'hi' }], read: { api: 5 } }
+    const none = { send: [], read: {} }
+
+    expect(Thread.outboxOf(JSON.stringify({ v: 1, session: 's0', ...asks }), 's1')).toEqual(none)
+    expect(Thread.outboxOf(JSON.stringify({ v: 2, session: 's1', ...asks }), 's1')).toEqual(none)
+    expect(Thread.outboxOf(JSON.stringify({ session: 's1', ...asks }), 's1')).toEqual(none)
+  })
 })
