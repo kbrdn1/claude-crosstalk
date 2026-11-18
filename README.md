@@ -116,14 +116,18 @@ before the engine queues them.
   from the same socket, and a reply to a peer `ListAgents` no longer lists by
   that name goes to the socket it last wrote from.
 
+Not there yet: threads with subagents or teammates, remote (Remote Control /
+cloud) peers beyond what `ListAgents` reports.
+
 ### Herdr
 
 In an interactive session that runs in a Herdr terminal (`HC_TERMINAL_ID`
 set), crosstalk also publishes its conversations to a file and sends the
 replies Herdr leaves in another, so Herdr can show them and answer without
 the pane. Outside Herdr it does neither: no file, no timer; nor does a
-`claude -p` started from that terminal, which inherits its name. This section is the contract
-Herdr's `kt-crosstalk` mod reads; `v` changes when it breaks.
+`claude -p` started from that terminal, which inherits its name. This
+section is the contract Herdr's `kt-crosstalk` mod reads; `v` changes when
+it breaks.
 
 Each file has one writer, so neither side can lose the other's write.
 
@@ -169,9 +173,9 @@ half of one.
 - `threads` holds each conversation's messages, oldest first, text as sent
   (Markdown); 200 messages at most across the session. `id` is on a message
   sent from Herdr's outbox only.
-- `handled` is what became of each outbox entry, the 200 most recent ids:
-  `sent`, or `refused` with the reason. A refused send is in no thread, as in
-  the pane.
+- `handled` is what became of each outbox entry: `sent`, or `refused` with
+  the reason. It keeps every id the outbox still lists, and the 200 most
+  recent of the others. A refused send is in no thread, as in the pane.
 
 **Outbox**, written by Herdr only (write beside, then rename):
 `~/.claude/cache/herdr/<HC_TERMINAL_ID>.crosstalk-outbox.json`.
@@ -187,9 +191,10 @@ half of one.
 
 - crosstalk looks at the file every second (its mtime and size) and reads it
   only when it changed.
-- An outbox whose `v` is not 1, or whose `session` is not this session's id,
-  asks nothing: a new session in the same terminal never acts on what was
-  written for the one before. Without `session`, the outbox is this one's.
+- An outbox whose `v` is not 1, or whose `session` names another session,
+  asks nothing. Herdr always sets `session`, so a new session in the same
+  terminal never acts on what was written for the one before; an outbox
+  without it is taken by whichever session of the terminal reads it.
 - Each `send` entry goes out once per `id`, the way the pane's reply does:
   `SendMessage` to the peer's `address`, then the message in its thread.
   The id is saved before the send, so a reload never sends it twice; one a
@@ -206,9 +211,6 @@ half of one.
 A send the recipient holds for approval (the two sessions run in different
 permission modes) still shows as `sent`: the engine tells this session in a
 delivery notice that crosstalk does not read yet.
-
-Not there yet: threads with subagents or teammates, remote (Remote Control /
-cloud) peers beyond what `ListAgents` reports.
 
 ## Install
 
