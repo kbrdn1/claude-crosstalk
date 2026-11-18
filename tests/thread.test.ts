@@ -165,6 +165,22 @@ describe('thread', () => {
     expect(Thread.addressOf(thread, 'S1'), 'a reply goes to its live name').toBe('api-1d')
   })
 
+  test('a reply to a gone session never goes to whoever holds its name now', async () => {
+    const listed = { peers: [{ name: 'api-1d', kind: 'interactive', status: 'idle' }] }
+    let thread = Thread.withDirectory(Thread.withListing(Thread.EMPTY, listed), [
+      { id: 'S1', name: 'api-1d' },
+    ])
+
+    thread = Thread.record(thread, { dir: 'out', peer: 'S1', text: 'x', at: 1 })
+    // S1 is gone; a new session S9 got its name.
+    thread = Thread.withDirectory(Thread.withListing(thread, listed), [
+      { id: 'S9', name: 'api-1d' },
+    ])
+
+    expect(Thread.addressOf(thread, 'S9')).toBe('api-1d')
+    expect(Thread.addressOf(thread, 'S1'), 'nothing reaches it any more').toBe('S1')
+  })
+
   test('a conversation that resolves takes everything keyed by it to the session id', async () => {
     let thread = Thread.withListing(
       Thread.EMPTY,

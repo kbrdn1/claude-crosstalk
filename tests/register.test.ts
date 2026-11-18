@@ -756,6 +756,41 @@ describe('register', () => {
     expect(textOf(await $.ui.render(PANE))).not.toContain('‹ api')
   })
 
+  test('r renames the open conversation: the store keeps it, the pane shows it', async ($, on) => {
+    const w = world(on)
+
+    // The ring moves where it is asked, beneath the plugin.
+    on('ui.focus', () => ({}))
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'ready?'))
+    await $.command.run(CROSSTALK)
+
+    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+    await ui.press({ key: 'open:api' })
+    await w.clock.advance(1000)
+    // The person moves the ring to ‹: normal mode.
+    await $.ui.focus({
+      component: 'Pane',
+      requestId: 'crosstalk',
+      element: 'back',
+      origin: { kind: 'person' },
+    })
+    await ui.redraw()
+    await ui.press({ key: 'vim:r' })
+    await ui.redraw()
+
+    expect((await ui.find({ key: 'title' }))?.props.value, 'empty: no title yet').toBe('')
+
+    await ui.input({ key: 'title', text: '  API backend ', kind: 'submit' })
+    await w.clock.settle()
+    await ui.redraw()
+
+    expect(w.store.get('titles')).toEqual({ api: 'API backend' })
+    expect(textOf(await ui.drawn())).toContain('API backend')
+    expect(await ui.find({ key: 'title' }), 'back to normal mode').toBeUndefined()
+  })
+
   test('a message arriving while the pane is closed shows as unread', async ($, on) => {
     const w = world(on)
 
@@ -1432,6 +1467,18 @@ describe('names', () => {
     await w.clock.settle()
 
     expect(w.store.get('titles')).toEqual({ 'api-v2': 'API backend' })
+  })
+
+  test('a session leaving the listing: when it was last seen is kept for the next start', async ($, on) => {
+    const w = inHerdr(on)
+
+    await $.session.start(SESSION)
+    await $.session.receive(fromPeer('api', 'bye'))
+    await w.clock.advance(REFRESH_MS)
+    w.agents.listing = LISTING.replace(/\n {2}api \[a1aa87\][^\n]*/, '')
+    await w.clock.advance(REFRESH_MS)
+
+    expect(Thread.fromSaved(w.store.get('thread:s1'))?.seen.api).toBe(REFRESH_MS)
   })
 
   test('a title Herdr took out of its outbox and gives again applies again', async ($, on) => {

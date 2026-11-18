@@ -552,8 +552,12 @@ export const register: Register = on => {
       }
     }
 
-    if (next.entries !== listed.entries) {
-      // A conversation moved to its session id: kept for the next start.
+    const listedNow = new Set(next.peers.map(peer => Thread.keyOf(next, peer.name)))
+    const isGone = thread.peers.some(peer => !listedNow.has(Thread.keyOf(thread, peer.name)))
+
+    if (next.entries !== listed.entries || isGone) {
+      // A conversation moved to its session id, or a session left (when it
+      // was last seen): kept for the next start.
       await commit(next)
     } else {
       thread = next

@@ -302,13 +302,16 @@ function liveNameOf(thread: Thread, key: string): string | undefined {
 /**
  * Where a reply to `key` goes: its live name while ListAgents lists it, else
  * the socket it last wrote from (it outlives a rename, not a restart), else
- * the name it was last known by.
+ * the name it was last known by, unless another session holds that name now.
  */
 export function addressOf(thread: Thread, key: string): string {
+  const { name } = knownOf(thread, key)
+  const lastName = name !== undefined && keyOf(thread, name) === name ? name : undefined
+
   return (
     liveNameOf(thread, key) ??
     Object.entries(thread.aliases).findLast(([, peer]) => peer === key)?.[0] ??
-    knownOf(thread, key).name ??
+    lastName ??
     key
   )
 }
