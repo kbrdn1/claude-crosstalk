@@ -412,9 +412,10 @@ export const register: Register = on => {
         continue
       }
 
-      const { id, name, terminal, project } = published
-      const topic =
-        terminal === undefined ? undefined : await read(`${terminal}.flow.json`, Thread.topicOf)
+      const { id, name, project } = published
+      // A v1 publication names no terminal: its file's name does.
+      const terminal = published.terminal ?? entry.name.replace(/\.crosstalk\.json$/, '')
+      const topic = await read(`${terminal}.flow.json`, Thread.topicOf)
 
       sessions.set(name, {
         id,
@@ -1070,7 +1071,17 @@ export const register: Register = on => {
           host?.invalidate()
           refocus('back')
 
-          if (key !== undefined) void storeTitles({ [key]: title.trim() })
+          if (key === undefined) {
+            return
+          }
+
+          void storeTitles({ [key]: title.trim() }).then(isStored => {
+            // The open pane holds toasts back: the reason goes in the pane.
+            if (!isStored) {
+              notice = 'title not kept: the store refused it'
+              host?.invalidate()
+            }
+          })
         },
       },
       thread,

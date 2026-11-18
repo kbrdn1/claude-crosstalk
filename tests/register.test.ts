@@ -56,10 +56,12 @@ function world(
   const writes: { holdNext?: Promise<void> } = {}
   // Whether the store refuses every save, how many reads of the titles fail
   // next, and what a save of the titles waits for first.
-  const saves: { isFull: boolean; titleReadsFailing: number; holdTitles?: Promise<void> } = {
-    isFull: false,
-    titleReadsFailing: 0,
-  }
+  const saves: {
+    isFull: boolean
+    titleReadsFailing: number
+    holdTitles?: Promise<void>
+    holdNextTitles?: Promise<void>
+  } = { isFull: false, titleReadsFailing: 0 }
   // What ListAgents answers.
   const agents = { listing: LISTING }
   let version = 0
@@ -182,7 +184,11 @@ function world(
     }
 
     if (e.key === 'titles') {
+      const next = saves.holdNextTitles
+
+      saves.holdNextTitles = undefined
       await saves.holdTitles
+      await next
     }
 
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
@@ -270,6 +276,34 @@ function world(
  */
 function inHerdr(on: On, stored: Record<string, unknown> = {}) {
   return world(on, [], stored, { HC_TERMINAL_ID: 't9' })
+}
+
+/**
+ * In world `w`, a session that `api` wrote to, its pane mounted on that
+ * conversation in rename mode: the ring moved to ‹ as the person would
+ * (normal mode), r pressed, and the engine's autoFocus landing on the title
+ * field. The ring moves with a ui.focus hook seated beneath.
+ */
+async function renaming($: Engine, on: On, w: ReturnType<typeof world>) {
+  const ring = (element: string) =>
+    $.ui.focus({ component: 'Pane', requestId: 'crosstalk', element, origin: { kind: 'person' } })
+
+  on('ui.focus', () => ({}))
+  await $.session.start(SESSION)
+  await $.session.receive(fromPeer('api', 'ready?'))
+  await $.command.run(CROSSTALK)
+
+  const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
+
+  await ui.press({ key: 'open:api' })
+  await w.clock.advance(1000)
+  await ring('back')
+  await ui.redraw()
+  await ui.press({ key: 'vim:r' })
+  await ring('title')
+  await ui.redraw()
+
+  return ui
 }
 
 /**
@@ -758,29 +792,11 @@ describe('register', () => {
 
   test('r renames the open conversation: the store keeps it, the pane shows it', async ($, on) => {
     const w = world(on)
+    const ui = await renaming($, on, w)
+    const field = await ui.find({ key: 'title' })
 
-    // The ring moves where it is asked, beneath the plugin.
-    on('ui.focus', () => ({}))
-    await $.session.start(SESSION)
-    await $.session.receive(fromPeer('api', 'ready?'))
-    await $.command.run(CROSSTALK)
-
-    const ui = await $.ui.mount({ plugin: 'crosstalk', ...PANE, surface: 'terminal' as const })
-
-    await ui.press({ key: 'open:api' })
-    await w.clock.advance(1000)
-    // The person moves the ring to ‹: normal mode.
-    await $.ui.focus({
-      component: 'Pane',
-      requestId: 'crosstalk',
-      element: 'back',
-      origin: { kind: 'person' },
-    })
-    await ui.redraw()
-    await ui.press({ key: 'vim:r' })
-    await ui.redraw()
-
-    expect((await ui.find({ key: 'title' }))?.props.value, 'empty: no title yet').toBe('')
+    expect(field?.props.value, 'empty: no title yet').toBe('')
+    expect(field?.props.autoFocus, 'the keys go to the title field').toBe(true)
 
     await ui.input({ key: 'title', text: '  API backend ', kind: 'submit' })
     await w.clock.settle()
@@ -789,6 +805,38 @@ describe('register', () => {
     expect(w.store.get('titles')).toEqual({ api: 'API backend' })
     expect(textOf(await ui.drawn())).toContain('API backend')
     expect(await ui.find({ key: 'title' }), 'back to normal mode').toBeUndefined()
+  })
+
+  test('r starts from the title given, and says so when the store refuses one', async ($, on) => {
+    const w = world(on, [], { titles: { api: 'Old' } })
+    const ui = await renaming($, on, w)
+
+    expect((await ui.find({ key: 'title' }))?.props.value).toBe('Old')
+
+    w.saves.isFull = true
+    await ui.input({ key: 'title', text: 'New', kind: 'submit' })
+    await w.clock.settle()
+    await ui.redraw()
+
+    expect(w.store.get('titles')).toEqual({ api: 'Old' })
+    expect(textOf(await ui.drawn())).toContain('title not kept')
+  })
+
+  test('two titles stored at once are both kept', async ($, on) => {
+    const w = inHerdr(on)
+    const ui = await renaming($, on, w)
+    let release = () => {}
+
+    w.saves.holdNextTitles = new Promise(resolve => {
+      release = resolve
+    })
+    w.outbox({ v: 2, title: { web: 'W' } })
+    await w.clock.advance(OUTBOX_MS)
+    await ui.input({ key: 'title', text: 'B', kind: 'submit' })
+    release()
+    await w.clock.settle()
+
+    expect(w.store.get('titles')).toEqual({ web: 'W', api: 'B' })
   })
 
   test('a message arriving while the pane is closed shows as unread', async ($, on) => {
@@ -1257,6 +1305,17 @@ describe('names', () => {
     await w.clock.settle()
 
     expect(w.published().peers.find(peer => peer.name === 'api')?.key).toBe(API_ID)
+  })
+
+  test("a peer still on v1 gets its topic through its file's terminal name", async ($, on) => {
+    const w = inHerdr(on)
+
+    w.herdrFile('t3.crosstalk.json', { v: 1, session: { id: API_ID, name: 'api' } })
+    w.herdrFile('t3.flow.json', API_FLOW)
+    await $.session.start(SESSION)
+    await w.clock.settle()
+
+    expect(w.published().peers.find(peer => peer.name === 'api')?.topic).toBe('#61')
   })
 
   test('when two terminals claim one name, the newest file says who it is', async ($, on) => {
