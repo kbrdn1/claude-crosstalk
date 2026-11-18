@@ -580,7 +580,9 @@ export const register: Register = on => {
     await prune($).catch(() => undefined)
 
     // A reload (a module edit, a worker respawn) finds its pane still up.
-    isOpen = (await host.panes()).some(pane => pane.id === PANE_ID)
+    if ((await host.panes()).some(pane => pane.id === PANE_ID)) {
+      isOpen = true
+    }
 
     // The open pane lists the peers; in Herdr they are listed all along, for
     // the session's name and its peers' status.
