@@ -27,8 +27,9 @@ export type Kit = {
   draft: string
   notice?: string
   view: 'inbox' | 'thread'
-  // In a conversation: typing in the reply field, or moving (vim's modes).
-  mode: 'insert' | 'normal'
+  // In a conversation: typing in the reply field, moving (vim's modes), or
+  // typing its title.
+  mode: 'insert' | 'normal' | 'rename'
   // The element the ring starts on when the pane takes the keyboard.
   home: string
   onOpen: (peer: string) => void
@@ -42,6 +43,9 @@ export type Kit = {
   onBack: (by: number) => void
   onInput: (text: string) => void
   onSubmit: (text: string) => void
+  // Normal mode's `r`, and the title typed for the open conversation.
+  onRename: () => void
+  onTitle: (title: string) => void
 }
 
 export type Group = {
@@ -316,6 +320,10 @@ function threadKeys(kit: Kit, shown: number, total: number): RenderElement {
     return hintOf(kit, kit.columns >= 48 ? '⏎ send · esc normal mode' : '⏎ send · esc normal')
   }
 
+  if (kit.mode === 'rename') {
+    return hintOf(kit, '⏎ rename · esc cancel')
+  }
+
   const half = Math.max(1, Math.ceil(shown / 2))
 
   return legend(kit, [
@@ -325,6 +333,7 @@ function threadKeys(kit: Kit, shown: number, total: number): RenderElement {
     { hotkey: 'u', label: '⇡', onPress: () => kit.onBack(half) },
     { hotkey: 'g', label: 'latest', onPress: () => kit.onBack(-total) },
     { hotkey: 'i', label: 'reply', onPress: () => kit.onInsert() },
+    { hotkey: 'r', label: 'rename', onPress: () => kit.onRename() },
     { hotkey: 'h', label: 'inbox', onPress: () => kit.onInbox() },
     { hotkey: 'q', label: 'close', onPress: () => kit.onClose() },
   ])
@@ -332,9 +341,9 @@ function threadKeys(kit: Kit, shown: number, total: number): RenderElement {
 
 function statusOf(
   thread: Thread.Thread,
-  peer: string,
+  key: string,
 ): { dot: string; color: string; status?: string } {
-  const status = thread.peers.find(listed => listed.name === peer)?.status
+  const status = thread.peers.find(listed => Thread.keyOf(thread, listed.name) === key)?.status
 
   if (status === 'idle') return { dot: '●', color: COLORS.idle, status }
   if (status === 'busy') return { dot: '●', color: COLORS.busy, status }
@@ -365,7 +374,7 @@ function rule(kit: Kit, label?: string): RenderElement {
   return <Text color={COLORS.muted}>{ruleOf(kit.columns, label)}</Text>
 }
 
-function groupView(kit: Kit, group: Group, width: number): RenderElement {
+function groupView(kit: Kit, group: Group, width: number, title: string): RenderElement {
   const { Box, Text, Markdown } = kit.ui
   const { isSplit } = layoutOf(kit.columns)
   const isMine = group.dir === 'out'
@@ -380,7 +389,7 @@ function groupView(kit: Kit, group: Group, width: number): RenderElement {
       <Box justifyContent={onRight ? 'flex-end' : 'flex-start'}>
         <Text>
           <Text weight="semibold" color={color}>
-            {isMine ? 'you' : group.peer}
+            {isMine ? 'you' : title}
           </Text>
           <Text dimColor>{time}</Text>
         </Text>
@@ -458,7 +467,7 @@ function inboxView(kit: Kit, thread: Thread.Thread): RenderElement {
                   <Text color={color}>{`${dot} `}</Text>
                   <Button
                     key={`open:${conversation.peer}`}
-                    label={fitName(conversation.peer, room)}
+                    label={fitName(conversation.title, room)}
                     plain
                     {...(`open:${conversation.peer}` === kit.home
                       ? { autoFocus: true as const }
@@ -502,8 +511,11 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
   const all = Thread.messagesWith(thread, selected)
   const window = windowOf(all, threadRows, kit.back, text)
   const badge = elsewhere > 0 ? `✉ ${elsewhere}` : ''
+  const title =
+    Thread.conversationsOf(thread).find(conversation => conversation.peer === selected)?.title ??
+    selected
   const name = fitName(
-    selected,
+    title,
     Math.max(4, kit.columns - 4 - (status ? status.length + 3 : 0) - badge.length - 2),
   )
 
@@ -543,10 +555,10 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
       <Box height={threadRows} flexDirection="column" justifyContent="flex-end" overflow="hidden">
         {all.length === 0 ? (
           <Box justifyContent="center">
-            <Text dimColor>{`No message with ${selected} yet. Say hi below.`}</Text>
+            <Text dimColor>{`No message with ${title} yet. Say hi below.`}</Text>
           </Box>
         ) : (
-          groupsOf(window.entries).map(group => groupView(kit, group, text))
+          groupsOf(window.entries).map(group => groupView(kit, group, text, title))
         )}
       </Box>
 
@@ -568,15 +580,26 @@ function threadView(kit: Kit, thread: Thread.Thread): RenderElement {
         <Text weight="semibold" color={COLORS.accent}>
           {'❯ '}
         </Text>
-        <Input
-          key="reply"
-          placeholder={`message ${selected}…`}
-          submitLabel="send"
-          {...(kit.home === 'reply' ? { autoFocus: true as const } : {})}
-          value={kit.draft}
-          onInput={value => kit.onInput(value)}
-          onSubmit={value => kit.onSubmit(value)}
-        />
+        {kit.mode === 'rename' ? (
+          <Input
+            key="title"
+            placeholder={`a title for ${title}…`}
+            submitLabel="rename"
+            {...(kit.home === 'title' ? { autoFocus: true as const } : {})}
+            value={Object.hasOwn(thread.titles, selected) ? (thread.titles[selected] ?? '') : ''}
+            onSubmit={value => kit.onTitle(value)}
+          />
+        ) : (
+          <Input
+            key="reply"
+            placeholder={`message ${title}…`}
+            submitLabel="send"
+            {...(kit.home === 'reply' ? { autoFocus: true as const } : {})}
+            value={kit.draft}
+            onInput={value => kit.onInput(value)}
+            onSubmit={value => kit.onSubmit(value)}
+          />
+        )}
       </Box>
 
       {threadKeys(kit, window.entries.length, all.length)}

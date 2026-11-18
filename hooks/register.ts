@@ -173,7 +173,7 @@ export const register: Register = on => {
   // The inbox, or the conversation opened from it.
   let view: 'inbox' | 'thread' = 'inbox'
   // In a conversation, vim's modes: typing a reply, or moving with keys.
-  let mode: 'insert' | 'normal' = 'insert'
+  let mode: 'insert' | 'normal' | 'rename' = 'insert'
   // The key of our element holding the focus ring, as ui.focus last said.
   let ring: string | undefined
   // In Herdr: where this session publishes its conversations, and where
@@ -203,7 +203,7 @@ export const register: Register = on => {
   function onRing(key: string | undefined): void {
     ring = key
 
-    const now = key === 'reply' ? 'insert' : 'normal'
+    const now = key === 'reply' ? 'insert' : key === 'title' ? 'rename' : 'normal'
 
     if (view === 'thread' && key !== undefined && now !== mode) {
       mode = now
@@ -255,7 +255,7 @@ export const register: Register = on => {
    */
   function homeOf(): string {
     if (view === 'thread') {
-      return mode === 'insert' ? 'reply' : 'back'
+      return mode === 'insert' ? 'reply' : mode === 'rename' ? 'title' : 'back'
     }
 
     const peers = Thread.conversationsOf(thread).map(c => c.peer)
@@ -857,11 +857,11 @@ export const register: Register = on => {
   })
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
-    // The person's esc in a conversation leaves the reply field for normal
-    // mode, then goes back to the inbox, as vim and a messaging app would;
-    // /crosstalk and q (the plugin's close) still close.
+    // The person's esc in a conversation leaves the reply field (or the title
+    // being typed) for normal mode, then goes back to the inbox, as vim and a
+    // messaging app would; /crosstalk and q (the plugin's close) still close.
     if (e.origin.kind === 'person' && view === 'thread') {
-      if (mode === 'insert') {
+      if (mode === 'insert' || mode === 'rename') {
         mode = 'normal'
         host?.invalidate()
         refocus('back')
@@ -967,6 +967,21 @@ export const register: Register = on => {
           drafts.delete(thread.selected ?? '')
           notice = undefined
           void reply(text)
+        },
+        // The legend that held the keys goes with the mode: they are asked
+        // back once the title field is drawn, as on a view switch.
+        onRename: () => {
+          mode = 'rename'
+          host?.invalidate()
+          refocus('title')
+        },
+        onTitle: title => {
+          const key = thread.selected
+
+          mode = 'normal'
+          refocus('back')
+
+          if (key !== undefined) void storeTitles({ [key]: title.trim() })
         },
       },
       thread,
