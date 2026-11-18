@@ -167,9 +167,12 @@ half of one.
 - `session.name` is the name `ListAgents` gives this session; absent until
   it answered. In Herdr, `ListAgents` runs at the start and every 15 seconds,
   pane open or not.
+- `updatedAt` is when what the file says last changed, not a heartbeat: an
+  idle session leaves it as it was.
 - `peers` are the inbox's rows, most recent first: every conversation, then
-  each idle local session nobody talked to (no `last`). `address` is where a
-  reply goes. `status` and `at` are absent where unknown.
+  each idle local session nobody talked to (no `last`). `address` is where
+  crosstalk sends a reply; the outbox's `to` takes the `name`. `status` and
+  `at` are absent where unknown.
 - `threads` holds each conversation's messages, oldest first, text as sent
   (Markdown); 200 messages at most across the session. `id` is on a message
   sent from Herdr's outbox only.
